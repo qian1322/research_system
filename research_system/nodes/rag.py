@@ -52,7 +52,11 @@ def rag_retriever_node(state: ResearchState) -> dict:
     ]
     # Fresh in-memory collection per research run -- no cross-run leakage.
     vectorstore = Chroma.from_documents(documents=docs, embedding=config.get_embeddings())
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    # k=6 comfortably covers the planner's max of 5 sub-questions (one chunk per
+    # sub-question, see docs above) -- previously k=3 silently dropped whichever
+    # chunks scored lowest on topic similarity, starving the Writer of real
+    # material for those sub-questions and pushing it toward inventing content.
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 6})
     retrieved_docs = retriever.invoke(state["topic"])
     print(f"  -> retrieved {len(retrieved_docs)} relevant chunks")
 
@@ -68,7 +72,11 @@ def rag_retriever_node(state: ResearchState) -> dict:
         "the report.\n"
         "Citation rule: keep every [n] marker exactly as written -- don't remove, "
         "renumber, or invent one. If a piece of information has no marker, don't add one.\n"
-        "Respond in Chinese, under 500 characters."
+        # Previously capped at 500 chars for a report covering 3-5 sub-questions --
+        # too little real material for the Writer to draw on, which pushed it
+        # toward fabricating specifics to fill the gaps (see README's Evaluation
+        # section for a real example this surfaced).
+        "Respond in Chinese, under 2000 characters."
     )
     rag_llm = config.get_llm(temperature=0.3)
     response = rag_llm.invoke([("user", prompt)])

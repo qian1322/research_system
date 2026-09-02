@@ -42,10 +42,17 @@ research_system/
 │       ├── rag.py                # rag_retriever_node: citation remap + Chroma vector retrieval
 │       ├── writer.py             # writer_node: drafts report, preserves [n] citations
 │       └── critic.py             # critic_node, should_revise, renumber_citations
+├── eval/                        # opt-in evaluation harness, runs the REAL pipeline (see ## Evaluation)
+│   ├── cases.py                  # fixed set of eval topics
+│   ├── metrics.py                # deterministic, API-free citation/length metrics
+│   ├── judge.py                  # LLM-as-judge scoring (coverage/faithfulness/coherence/citations)
+│   ├── run_eval.py                # CLI: run real pipeline + score + persist to eval/results/
+│   └── compare.py                 # CLI: regression diff between two saved eval runs
 └── tests/
     ├── conftest.py               # FakeLLM/FakeTavilySearch/FakeEmbeddings so tests never hit the network
     ├── test_critic.py            # unit test for the revision-loop routing logic
-    └── test_pipeline.py          # end-to-end graph run with the fakes
+    ├── test_pipeline.py          # end-to-end graph run with the fakes
+    └── test_eval_metrics.py      # unit tests for eval/metrics.py's pure functions
 ```
 
 ## Key design points
@@ -126,6 +133,90 @@ and without any API keys:
 pytest
 ```
 
+## Evaluation
+
+`pytest` (above) checks pipeline *logic* against fakes — routing, state shapes.
+It can't tell you whether the pipeline produces a good, faithfully-cited
+report from a real model and real search results, since `FakeLLM` always
+returns the same static string regardless of the prompt. `eval/` is a
+separate, opt-in harness that runs the REAL pipeline (real DeepSeek + Tavily
+calls) against a fixed set of topics (`eval/cases.py`) and scores each run
+two ways:
+
+**Rule-based (deterministic, no API calls — `eval/metrics.py`, unit-tested
+offline in `tests/test_eval_metrics.py`):**
+- citation validity — every `[n]` in the report resolves to a real, in-range source
+- reference-list consistency — body citations and `## References` entries
+  match exactly (this doubles as a regression check on `renumber_citations()`
+  against real LLM output, which the fake-based tests can't reach)
+- citation coverage — fraction of retrieved sources actually cited (has a
+  structural ceiling tied to RAG's top-k chunk retrieval — see the caveat in
+  `eval/metrics.py`; more useful for before/after comparison than as an
+  absolute score)
+- report length (chars + tokens, via `tiktoken`'s `cl100k_base` as a
+  consistent length proxy, not an exact DeepSeek token count)
+- revision count — did the Writer-Critic loop hit its 3-revision hard stop
+- wall-clock latency
+
+**LLM-as-judge (`eval/judge.py`, structured output, 1-5 per dimension):**
+coverage (does the report address every planned sub-question), faithfulness
+(checked against real retrieved source excerpts, not just the report text),
+coherence, and citation appropriateness. When `OPENAI_API_KEY` is set,
+judging uses `gpt-4o-mini` instead of DeepSeek, to avoid the pipeline's own
+model grading its own output.
+
+### Running it
+
+```bash
+python -m eval.run_eval --label baseline
+python -m eval.run_eval --label baseline --cases tech-agentic-ai-zh,history-silk-road-zh
+python -m eval.run_eval --label baseline --no-judge   # skip the judge LLM call
+```
+
+Writes `eval/results/<timestamp>-<label>.json` (full data, human-readable
+Chinese — not escaped) and a matching `.md` summary table. `eval/results/`
+is gitignored.
+
+### Regression comparison
+
+```bash
+python -m eval.compare eval/results/<before>.json eval/results/<after>.json
+```
+
+Prints an aggregate delta table plus a per-case judge-score delta — the
+intended workflow for checking whether a prompt/model/RAG-`k` change
+actually helped, not just "feels different." Caveat: several nodes run
+above temperature 0 (writer=0.7, search=0.3, rag=0.3), so a single
+before/after pair reflects the change *plus* run-to-run noise — run each
+side twice if you need a confident before/after claim.
+
+### Sample output (real 2-case run, no code changes yet)
+
+| Metric | Value |
+|---|---|
+| Citation valid rate | 100% |
+| Reference-list consistent rate | 100% |
+| Avg citation coverage | 46% |
+| Avg report length (tokens) | 4816 |
+| Avg latency (s) | 61.9 |
+| Max-revision hit rate | 0% |
+| Avg judge score (1-5) | 2.75 |
+| Judge pass rate | 0% |
+
+This run's `judge_metrics.reasoning` fields caught a real failure mode
+`pytest`'s fakes structurally can't reach: the Writer fabricating specific
+case studies and statistics not present in any retrieved source, which the
+pipeline's own Critic (checking structure/coherence, not fact-grounding)
+approved on the first draft both times (`revision_count: 0`). See a saved
+run's JSON for the itemized per-claim findings.
+
+### Cost caveat
+
+`eval/run_eval.py` makes real DeepSeek + Tavily API calls (and OpenAI calls
+if `OPENAI_API_KEY` is set) for every case — this costs money and takes
+minutes, so it is intentionally **not** part of `pytest`/CI. The rule-based
+metric functions themselves are pure and fully unit-tested offline.
+
 ## Resume bullet
 
 ```
@@ -144,4 +235,10 @@ Multi-Agent Deep Research System — LangGraph, DeepSeek
   revision-count limit to guarantee termination.
 - Backed all agents with DeepSeek's OpenAI-compatible API for ~95% lower LLM cost
   vs. GPT-4-class models; added optional LangSmith tracing and a Streamlit UI.
+- Built an offline evaluation harness (deterministic citation/reference-integrity
+  checks + a cross-provider LLM-as-judge on coverage/faithfulness/coherence) that
+  runs the real pipeline end-to-end and supports before/after regression
+  comparison; it surfaced a real hallucination failure mode (fabricated case
+  studies/statistics) that the pipeline's own Critic and the fake-based unit
+  tests both missed.
 ```

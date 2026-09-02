@@ -52,6 +52,20 @@ def renumber_citations(report: str, numbered_sources: List[str]) -> str:
     return f"{new_body}\n\n{REFERENCES_MARKER}\n{refs}\n"
 
 
+# DeepSeek's tool_choice="any" isn't always honored -- the model sometimes
+# replies without calling the tool at all, in which case with_structured_output
+# returns None (documented langchain_core behavior, not an error) instead of a
+# CriticOutput. Retry a couple times before giving up, since this is usually
+# transient.
+def _invoke_critic_with_retry(critic_llm, prompt: str, max_retries: int = 2) -> CriticOutput | None:
+    for attempt in range(max_retries + 1):
+        result = critic_llm.invoke([("user", prompt)])
+        if result is not None:
+            return result
+        print(f"  -> Critic returned no structured output (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+    return None
+
+
 def critic_node(state: ResearchState) -> dict:
     revision = state.get("revision_count", 0)
     print(f"[Critic] Reviewing (revision_count={revision})")
@@ -67,10 +81,17 @@ def critic_node(state: ResearchState) -> dict:
         }
 
     prompt = (
-        f'Topic: {state["topic"]}\n'
+        f'Topic: {state["topic"]}\n\n'
+        f'Retrieved source material (the ONLY material this report is allowed to be '
+        f'grounded in; [n] markers are citation numbers):\n{state.get("rag_context", "")}\n\n'
         f'Report:\n{state["draft_report"]}\n\n'
-        "Rate the report: score(1-10), approved(>=7), "
-        "improvements, critique_summary. Respond in Chinese."
+        "Rate the report: score(1-10), approved(>=7), improvements, critique_summary.\n"
+        "Fact-check requirement: check every specific number, statistic, named case "
+        "study, company, or example in the report against the retrieved source material "
+        "above. Anything not traceable to that material is fabricated. If the report "
+        "contains fabricated specifics, do NOT approve it (approved=false) no matter how "
+        "well-organized it reads, and list each fabricated claim in improvements.\n"
+        "Respond in Chinese."
     )
     # method="function_calling": ChatOpenAI defaults to method="json_schema", whose
     # response_format DeepSeek's API rejects with a 400 (see planner_node for the
@@ -78,7 +99,16 @@ def critic_node(state: ResearchState) -> dict:
     critic_llm = config.get_llm(temperature=0.2).with_structured_output(
         CriticOutput, method="function_calling"
     )
-    result = critic_llm.invoke([("user", prompt)])
+    result = _invoke_critic_with_retry(critic_llm, prompt)
+
+    if result is None:
+        print("  -> Critic produced no verdict after retries. Treating as not approved.")
+        return {
+            "quality_approved": False,
+            "critique": "Critic did not return a valid verdict after retries; please revise for clarity and structure.",
+            "revision_count": revision + 1,
+        }
+
     print(f"  -> Score: {result.score}/10 | Approved: {result.approved}")
 
     if result.approved:

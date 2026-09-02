@@ -52,6 +52,27 @@ def renumber_citations(report: str, numbered_sources: List[str]) -> str:
     return f"{new_body}\n\n{REFERENCES_MARKER}\n{refs}\n"
 
 
+# numbered_sources only retains bare URLs (see rag._renumber_to_global); the raw
+# source text lives in state["search_results"][*]["sources"][*]["content"]. Rebuild
+# citation number -> source excerpt so the Critic (and eval/judge.py, which imports
+# this) can check a specific claim against the actual text a citation points to,
+# instead of a single blended summary blob.
+def build_source_excerpt_map(
+    search_results: List[dict], numbered_sources: List[str], max_chars_per_source: int = 400
+) -> dict:
+    url_to_content: dict = {}
+    for r in search_results:
+        for s in r.get("sources", []):
+            url = s.get("url")
+            if url and url not in url_to_content:
+                url_to_content[url] = s.get("content", "")
+
+    return {
+        i: url_to_content.get(url, "")[:max_chars_per_source]
+        for i, url in enumerate(numbered_sources, start=1)
+    }
+
+
 # DeepSeek's tool_choice="any" isn't always honored -- the model sometimes
 # replies without calling the tool at all, in which case with_structured_output
 # returns None (documented langchain_core behavior, not an error) instead of a
@@ -80,17 +101,24 @@ def critic_node(state: ResearchState) -> dict:
             "critique": "Max revisions reached.",
         }
 
+    excerpts = build_source_excerpt_map(state.get("search_results", []), numbered_sources)
+    sources_block = "\n".join(f"[{n}] {numbered_sources[n - 1]}\n{text}" for n, text in excerpts.items())
+
     prompt = (
         f'Topic: {state["topic"]}\n\n'
-        f'Retrieved source material (the ONLY material this report is allowed to be '
-        f'grounded in; [n] markers are citation numbers):\n{state.get("rag_context", "")}\n\n'
+        f'Source excerpts (numbered, matching [n] citations in the report below; the '
+        f'ONLY material this report is allowed to be grounded in):\n{sources_block}\n\n'
         f'Report:\n{state["draft_report"]}\n\n'
         "Rate the report: score(1-10), approved(>=7), improvements, critique_summary.\n"
-        "Fact-check requirement: check every specific number, statistic, named case "
-        "study, company, or example in the report against the retrieved source material "
-        "above. Anything not traceable to that material is fabricated. If the report "
-        "contains fabricated specifics, do NOT approve it (approved=false) no matter how "
-        "well-organized it reads, and list each fabricated claim in improvements.\n"
+        "Fact-check requirement: for EACH [n] citation used in the report, check it "
+        "against source excerpt [n] above -- the claim is only valid if that excerpt "
+        "actually supports it. Flag any specific number, percentage, statistic, "
+        "company name, or case study that is not an exact or clearly reasonable match "
+        "to its cited excerpt -- including numbers that look like a rounded or blended "
+        "version of a real number in the source (e.g. citing 85% when the excerpt says "
+        "79%). If the report contains such unsupported specifics, do NOT approve it "
+        "(approved=false) no matter how well-organized it reads, and list each one in "
+        "improvements.\n"
         "Respond in Chinese."
     )
     # method="function_calling": ChatOpenAI defaults to method="json_schema", whose

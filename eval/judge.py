@@ -11,6 +11,7 @@ zero extra keys -- just with a weaker bias guarantee (noted in the README).
 from pydantic import BaseModel, Field
 
 from research_system import config as pipeline_config
+from research_system.nodes.critic import build_source_excerpt_map
 
 PASS_THRESHOLD = 4  # out of 5, on the averaged 4-dimension score
 
@@ -32,27 +33,6 @@ def get_judge_llm(temperature: float = 0.0):
 
         return ChatOpenAI(model="gpt-4o-mini", api_key=pipeline_config.OPENAI_API_KEY, temperature=temperature)
     return pipeline_config.get_llm(temperature=temperature)
-
-
-# numbered_sources 只保留了裸 URL（见 rag._renumber_to_global），真实的
-# 来源文本还留在 search_results[*]["sources"][*]["content"] 里 —— 这里把
-# 两者重新对上号，重建"引用编号 -> 来源摘录"，好让裁判模型看到真实内容，
-# 而不是只凭一个 URL 字符串去判断忠实度。同一个 URL 在多个子问题里重复
-# 出现时，保留第一次遇到的内容。
-def build_source_excerpt_map(
-    search_results: list[dict], numbered_sources: list[str], max_chars_per_source: int = 400
-) -> dict[int, str]:
-    url_to_content: dict[str, str] = {}
-    for r in search_results:
-        for s in r.get("sources", []):
-            url = s.get("url")
-            if url and url not in url_to_content:
-                url_to_content[url] = s.get("content", "")
-
-    return {
-        i: url_to_content.get(url, "")[:max_chars_per_source]
-        for i, url in enumerate(numbered_sources, start=1)
-    }
 
 
 # 总入口：拼一个包含 topic、计划的子问题、编号来源摘录、报告正文的 prompt，

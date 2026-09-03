@@ -76,7 +76,7 @@ def rag_retriever_node(state: ResearchState) -> dict:
         # too little real material for the Writer to draw on, which pushed it
         # toward fabricating specifics to fill the gaps (see README's Evaluation
         # section for a real example this surfaced).
-        "Respond in Chinese, under 2000 characters."
+        "Respond in the same language as the topic above, under 2000 characters."
     )
     rag_llm = config.get_llm(temperature=0.3)
     response = rag_llm.invoke([("user", prompt)])

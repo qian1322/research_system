@@ -208,6 +208,8 @@ mistake:
 | `critic-per-citation` | Critic checks each `[n]` against its own source excerpt, not one blended summary blob | 3.63 | 0% | 50% | 197.8 |
 | `max-revisions-5` *(reverted)* | Revision cap 3→5, hoping more attempts would resolve disagreements | 3.50 | 0% | **100%** | **386.7** |
 | `graded-severity` | Critic separates hard fabrication from honest hedged language; cap back to 3 | 3.50 | 0% | 50% | 129.1 |
+| `unified-rubric` | Critic and judge now score against the exact same shared `QualityVerdict` schema and `build_quality_prompt` (previously the Critic used a holistic 1-10 score with its own approval logic while the judge used this 4-dimension 1-5 rubric) | 3.25 | 0% | 50% | 124.7 |
+| `excerpt-bugfix` | Fixed a citation-index bug: source excerpts were looked up as `numbered_sources[n-1]`, an index into the pipeline's original, pre-renumbering source list — wrong as soon as `renumber_citations()` compresses `[n]` markers, which is almost every real run | 3.25 | 0% | 50% | 104.5 |
 
 What each row actually found:
 - **`critic-rag-fix`**: the Critic originally had *no* retrieved material to
@@ -245,6 +247,87 @@ What each row actually found:
   and "an independent judge thinks it's good" is still open — which is
   exactly why this harness exists as a check independent of the pipeline's
   own judgment, rather than trusting the Critic's self-report.
+- **`unified-rubric`**: closing "different rubrics" as an explanation for
+  that gap didn't close the gap itself. On the same 2 cases, the Critic
+  genuinely approved `history-silk-road-zh` at 4.50/5 average — not
+  force-approved, an actual pass — while the independent judge scored the
+  *exact same final report*, against the *exact same rubric and prompt*, at
+  3.50/5. Same report, same schema, different verdict. That ruled out
+  wording/schema mismatch and pointed at something more specific: was the
+  judge (or the Critic) even looking at the right source material for each
+  citation?
+- **`excerpt-bugfix`**: it was. `build_source_excerpt_map` matched citation
+  `[n]` to `numbered_sources[n-1]` — an index into the pipeline's *original*,
+  pre-compression source list. `renumber_citations()` compresses and
+  reorders `[n]` markers whenever the report doesn't cite every retrieved
+  source (true in effectively every real run — citation coverage has never
+  hit 100% in `eval/results/`), which breaks that index correspondence. A
+  judge fact-checking `[1]` in the final report could be reading a
+  completely different source's text than the one `[1]` actually points to.
+  Fixed by parsing the report's own `## References` section as ground truth
+  instead of trusting a stale index — verified independently with a
+  standalone, no-API deterministic repro before touching real eval numbers.
+  But on this same 2-case sample the aggregate judge score didn't move
+  (3.25→3.25): the two cases' scores moved in *opposite* directions
+  (`history-silk-road-zh` 3.50→3.00, `tech-agentic-ai-zh` 3.00→3.50) and
+  canceled out. The fix is real and independently proven correct; at n=2
+  there just wasn't enough signal to see it move an aggregate — which is
+  what forced the next step below.
+
+### Scaling the eval set: from 2 cases to 6
+
+Two rounds in a row (`excerpt-bugfix` above, and an earlier `graded-severity`
+vs. `unified-rubric` comparison not shown as a separate row) produced
+opposite-direction per-case swings that canceled out in the aggregate.
+Distinguishing a real effect from run-to-run noise had become the actual
+bottleneck, not the code — so the eval set was scaled from the 2 cases used
+throughout development to the full 6-case set in `eval/cases.py`, run for
+the first time end-to-end as `full6`:
+
+| Metric | Value |
+|---|---|
+| Avg judge score | 3.21 |
+| Judge pass rate | **0%** (0/6) |
+| Max-revision hit rate | **100%** (6/6) |
+| Avg citation coverage | 56.0% |
+| Avg latency (s) | 124.9 |
+
+Two things this surfaced that the 2-case runs had been masking:
+- **Judge pass rate is 0% and every case hit the revision cap.** Not one of
+  the 6 reports was ever approved by the Critic itself — all 6 ended via
+  force-approval at `MAX_REVISIONS`. The 50% max-revision-hit-rate readings
+  from the 2-case runs understated how rarely the Critic's own bar gets met
+  on a broader topic sample.
+- **Citation coverage split cleanly by language**: the 3 Chinese-topic cases
+  averaged 73.3% coverage; the 3 English-topic cases averaged 38.7%, with
+  `science-quantum-computing-en` at just 12%. Every Chinese case beat every
+  English case — a clean split, not noise.
+
+Root cause: `planner.py`, `search.py`'s synthesis step, and `rag.py`'s
+synthesis step all hardcoded "Respond in Chinese" regardless of topic
+language. Since the Planner's sub-question text is sent to Tavily verbatim
+as the search query, an English topic like fault-tolerant quantum computing
+was still being *searched* in Chinese — weak recall for a field whose
+primary literature is English.
+
+**`lang-follow-topic`**: replaced all 4 hardcoded "Respond in Chinese"
+instructions (Planner, search-agent synthesis, RAG synthesis, and Writer's
+final format) with "respond in the same language as the topic." Re-ran the 3
+English cases only (cheaper than the full 6, and isolates the effect):
+
+| Case | Coverage before → after | Judge score before → after |
+|---|---|---|
+| `finance-llm-investing-en` | 64% → **88%** | 3.00 → 3.50 |
+| `climate-carbon-capture-en` | 40% → **64%** | 3.25 → 3.00 |
+| `science-quantum-computing-en` | 12% → **60%** | 2.25 → 3.75 |
+| **Average** | 38.7% → **70.7%** | 2.83 → **3.42** |
+
+All 3 cases moved the same direction on coverage — unlike the noisy
+opposite-direction swings in `excerpt-bugfix`, this is a consistent,
+directional signal, not cancellation. Judge pass rate is still 0%: this
+fixed a retrieval-relevance problem specific to non-Chinese topics, not the
+deeper, still-open finding from `full6` that the Critic's own approval bar
+goes unmet almost regardless of topic.
 
 Full per-run JSON/MD (topics, drafts, and each judge's itemized `reasoning`)
 lives in `eval/results/`, which is gitignored — commit history and the
@@ -279,10 +362,16 @@ Multi-Agent Deep Research System — LangGraph, DeepSeek
 - Built an offline evaluation harness (deterministic citation/reference-integrity
   checks + a cross-provider LLM-as-judge on coverage/faithfulness/coherence) that
   runs the real pipeline end-to-end and supports before/after regression
-  comparison; drove 6 validated iterations with it (one deliberately reverted
+  comparison; drove 9 validated iterations with it (one deliberately reverted
   after data showed it made things worse), raising the average judge score
   from 2.75 to 3.50 (out of 5) and getting the first case to pass, while
   surfacing failure modes (fabricated case studies, blended statistics, a
-  Critic approval deadlock) the pipeline's own Critic and the fake-based unit
-  tests both missed.
+  Critic approval deadlock, a citation-index bug that silently fact-checked
+  claims against the wrong source) the pipeline's own Critic and the
+  fake-based unit tests both missed.
+- Scaled the eval set from 2 to 6 cases after noisy before/after deltas made
+  it clear 2 samples couldn't distinguish signal from run-to-run variance;
+  the larger sample surfaced a systemic language bug (non-Chinese topics
+  were being searched in Chinese), fixing it raised English-topic citation
+  coverage from 38.7% to 70.7% and judge score from 2.83 to 3.42.
 ```

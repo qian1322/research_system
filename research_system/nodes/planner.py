@@ -18,7 +18,7 @@ def planner_node(state: ResearchState) -> dict:
         "You are a research planning expert.\n"
         f'Topic: {state["topic"]}\n'
         "Break this into 3-5 specific, independently-answerable sub-questions.\n"
-        "Output thinking + sub_questions. Respond in Chinese."
+        "Output thinking + sub_questions, written in the same language as the topic above."
     )
     planner_llm = config.get_llm(temperature=0.3).with_structured_output(
         ResearchPlan, method="function_calling"

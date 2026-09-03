@@ -39,7 +39,7 @@ def search_agent(state: ResearchState) -> dict:
         f"bracketed number, e.g. '...market size reached $X [2]'. Only use numbers "
         f"1-{len(sources)} that appear above -- never invent one, and never write "
         "out the URL itself. A sentence may cite multiple sources, e.g. [1][3].\n"
-        "Respond in Chinese, under 300 characters."
+        "Respond in the same language as the topic above, under 300 characters."
     )
     search_llm = config.get_llm(temperature=0.3)
     response = search_llm.invoke([("user", prompt)])

@@ -21,7 +21,7 @@ def writer_node(state: ResearchState) -> dict:
         f'Context (from RAG retrieval; [n] markers are citation numbers):\n{state["rag_context"]}\n\n'
         f"Sources for each citation number:\n{sources_text}\n\n"
         f"Task: {task}\n\n"
-        "Format (in Chinese):\n"
+        "Format (respond in the same language as the topic above):\n"
         "# [Topic] Research Report\n"
         "## Executive Summary\n"
         "## Background\n"

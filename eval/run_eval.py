@@ -18,10 +18,19 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
+
 from eval.cases import EVAL_CASES, EvalCase
 from eval.judge import judge_report
 from eval.metrics import compute_rule_based_metrics
 from research_system.system import DeepResearchSystem
+
+
+# UsageMetadataCallbackHandler.usage_metadata is keyed by model name (a run
+# can touch >1 model, e.g. DeepSeek for the pipeline + gpt-4o-mini for the
+# judge) -- collapse it to one number for aggregation/comparison.
+def _sum_tokens(usage_metadata: dict) -> int:
+    return sum(m.get("total_tokens", 0) for m in usage_metadata.values())
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -33,21 +42,34 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # 不含打分本身的耗时。
 def run_case(case: EvalCase, run_judge: bool = True) -> dict:
     system = DeepResearchSystem()
+    # Real per-run cost, not a proxy: UsageMetadataCallbackHandler taps every
+    # node's LLM call via LangGraph's config propagation (see system.py),
+    # including calls hidden behind with_structured_output -- so it captures
+    # planner/critic's structured calls too, not just writer/search/rag's
+    # raw ones. Kept separate from the judge's handler below since the two
+    # answer different questions (pipeline cost vs. eval cost) and can even
+    # be different models.
+    pipeline_usage = UsageMetadataCallbackHandler()
     start = time.perf_counter()
-    result = system.research(case.topic, review_plan=lambda plan: plan)
+    result = system.research(case.topic, review_plan=lambda plan: plan, callbacks=[pipeline_usage])
     latency_seconds = time.perf_counter() - start
 
     rule_metrics = compute_rule_based_metrics(result)
     rule_metrics["latency_seconds"] = latency_seconds
+    rule_metrics["pipeline_token_usage"] = pipeline_usage.usage_metadata
+    rule_metrics["pipeline_total_tokens"] = _sum_tokens(pipeline_usage.usage_metadata)
 
     judge_metrics = None
     if run_judge:
+        judge_usage = UsageMetadataCallbackHandler()
         judge_metrics = judge_report(
             topic=case.topic,
             research_plan=result.get("research_plan", []),
             report=result.get("final_report", ""),
             search_results=result.get("search_results", []),
+            callbacks=[judge_usage],
         )
+        judge_metrics["token_usage"] = judge_usage.usage_metadata
 
     return {
         "case_id": case.id,
@@ -111,6 +133,7 @@ def aggregate_metrics(case_results: list[dict]) -> dict:
         "avg_citation_coverage_ratio": sum(r["rule_based_metrics"]["citation_coverage"]["coverage_ratio"] for r in valid) / n,
         "avg_token_count": sum(r["rule_based_metrics"]["length"]["token_count"] for r in valid) / n,
         "avg_latency_seconds": sum(r["rule_based_metrics"]["latency_seconds"] for r in valid) / n,
+        "avg_pipeline_tokens": sum(r["rule_based_metrics"]["pipeline_total_tokens"] for r in valid) / n,
         "max_revision_hit_rate": sum(r["rule_based_metrics"]["revision"]["hit_max_revisions"] for r in valid) / n,
         "avg_judge_score": (sum(r["judge_metrics"]["average_score"] for r in judged) / len(judged)) if judged else None,
         "judge_pass_rate": (sum(r["judge_metrics"]["passed"] for r in judged) / len(judged)) if judged else None,
@@ -148,18 +171,19 @@ def render_markdown(report: dict) -> str:
         f"| Avg citation coverage | {agg.get('avg_citation_coverage_ratio', 0):.1%} |",
         f"| Avg report length (tokens) | {agg.get('avg_token_count', 0):.0f} |",
         f"| Avg latency (s) | {agg.get('avg_latency_seconds', 0):.1f} |",
+        f"| Avg pipeline LLM tokens (real usage, all nodes) | {agg.get('avg_pipeline_tokens', 0):.0f} |",
         f"| Max-revision hit rate | {agg.get('max_revision_hit_rate', 0):.1%} |",
         judge_avg_line,
         judge_pass_line,
         "",
         "## Per-Case Results",
         "",
-        "| ID | Domain | Tokens | Revisions | Latency(s) | Cit Valid | Ref Consistent | Coverage | Judge Avg | Judge Pass |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| ID | Domain | Tokens | Pipeline Tokens | Revisions | Latency(s) | Cit Valid | Ref Consistent | Coverage | Judge Avg | Judge Pass |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in report["cases"]:
         if c.get("error"):
-            lines.append(f"| {c['case_id']} | {c['domain']} | ERROR: {c['error']} | | | | | | | |")
+            lines.append(f"| {c['case_id']} | {c['domain']} | ERROR: {c['error']} | | | | | | | | |")
             continue
         rm = c["rule_based_metrics"]
         jm = c.get("judge_metrics")
@@ -167,6 +191,7 @@ def render_markdown(report: dict) -> str:
         judge_pass_cell = _bool_mark(jm["passed"]) if jm else "n/a"
         lines.append(
             f"| {c['case_id']} | {c['domain']} | {rm['length']['token_count']} | "
+            f"{rm['pipeline_total_tokens']} | "
             f"{rm['revision']['revision_count']} | {rm['latency_seconds']:.1f} | "
             f"{_bool_mark(rm['citation_validity']['all_valid'])} | "
             f"{_bool_mark(rm['reference_list_consistency']['is_consistent'])} | "

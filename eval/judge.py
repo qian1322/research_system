@@ -37,10 +37,12 @@ def judge_report(
     report: str,
     search_results: list[dict],
     pass_threshold: int = PASS_THRESHOLD,
+    callbacks: list | None = None,
 ) -> dict:
     prompt = build_quality_prompt(topic, research_plan, report, search_results)
     judge_llm = get_judge_llm().with_structured_output(QualityVerdict, method="function_calling")
-    verdict: QualityVerdict = judge_llm.invoke([("user", prompt)])
+    invoke_config = {"callbacks": callbacks} if callbacks else None
+    verdict: QualityVerdict = judge_llm.invoke([("user", prompt)], config=invoke_config)
 
     scores = [
         verdict.coverage_score,

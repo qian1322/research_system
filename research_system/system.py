@@ -8,10 +8,19 @@ class DeepResearchSystem:
         self.app = build_graph()
         self._id = 0
 
-    def start_research(self, topic: str) -> dict:
-        """Run until the graph interrupts for human review, or finishes."""
+    def start_research(self, topic: str, callbacks: list | None = None) -> dict:
+        """Run until the graph interrupts for human review, or finishes.
+
+        callbacks: optional LangChain callback handlers (e.g.
+        UsageMetadataCallbackHandler) -- passed through LangGraph's config so
+        they see every node's LLM call, not just a top-level one. Used by
+        eval/run_eval.py to measure real token usage per run; None in normal
+        use, so this doesn't change default behavior.
+        """
         self._id += 1
         config = {"configurable": {"thread_id": f"run-{self._id}"}}
+        if callbacks:
+            config["callbacks"] = callbacks
         initial = {
             "topic": topic,
             "research_plan": [],
@@ -41,7 +50,7 @@ class DeepResearchSystem:
     def get_interrupt_payload(result: dict) -> dict:
         return result["__interrupt__"][0].value
 
-    def research(self, topic: str, review_plan=None) -> dict:
+    def research(self, topic: str, review_plan=None, callbacks: list | None = None) -> dict:
         """
         End-to-end run with an in-process human review loop.
 
@@ -49,8 +58,9 @@ class DeepResearchSystem:
             invoked with the Planner's proposed sub-questions; return the
             (possibly edited) list to approve. If omitted, the plan is
             approved as-is (no pause).
+        callbacks: see start_research.
         """
-        state = self.start_research(topic)
+        state = self.start_research(topic, callbacks=callbacks)
         result = state["result"]
 
         while self.is_interrupted(result):

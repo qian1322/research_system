@@ -7,6 +7,7 @@ from research_system import config
 from research_system.state import ResearchState
 
 REFERENCES_MARKER = "## References"
+MAX_REVISIONS = 5  # hard stop for the Writer-Critic loop
 
 
 class CriticOutput(BaseModel):
@@ -93,7 +94,7 @@ def critic_node(state: ResearchState) -> dict:
     numbered_sources = state.get("numbered_sources", [])
 
     # Hard stop: prevent infinite loop
-    if revision >= 3:
+    if revision >= MAX_REVISIONS:
         print("  -> Max revisions. Force approving.")
         return {
             "quality_approved": True,

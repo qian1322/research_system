@@ -13,6 +13,8 @@ from functools import lru_cache
 
 import tiktoken
 
+from research_system.nodes.critic import MAX_REVISIONS
+
 REFERENCES_MARKER = "## References"
 CITATION_RE = re.compile(r"\[(\d+)\]")
 REFERENCE_LINE_RE = re.compile(r"^\[(\d+)\]")
@@ -130,10 +132,11 @@ def report_length(report: str, encoding_name: str = TOKEN_ENCODING) -> dict:
     return {"char_count": len(report), "token_count": len(encoding.encode(report))}
 
 
-# 读取 Writer-Critic 循环跑了几轮修订、有没有撞到 3 次的硬上限。
-# 撞到上限意味着 critic 从未真正“满意”过，是被 revision_count>=3
-# 强制通过的，值得在评测报告里单独标出来。
-def revision_stats(result: dict, max_revisions: int = 3) -> dict:
+# 读取 Writer-Critic 循环跑了几轮修订、有没有撞到硬上限（MAX_REVISIONS，
+# 从 critic.py 导入，跟流水线实际用的值保持同步，不在这里另外写死一份）。
+# 撞到上限意味着 critic 从未真正“满意”过，是被强制通过的，
+# 值得在评测报告里单独标出来。
+def revision_stats(result: dict, max_revisions: int = MAX_REVISIONS) -> dict:
     revision_count = result.get("revision_count", 0)
     return {"revision_count": revision_count, "hit_max_revisions": revision_count >= max_revisions}
 

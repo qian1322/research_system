@@ -1,4 +1,5 @@
 from eval.metrics import (
+    MAX_REVISIONS,
     citation_coverage,
     citation_validity,
     compute_rule_based_metrics,
@@ -78,7 +79,7 @@ def test_report_length_counts_chars_and_tokens():
 
 
 def test_revision_stats_hit_max():
-    assert revision_stats({"revision_count": 3})["hit_max_revisions"] is True
+    assert revision_stats({"revision_count": MAX_REVISIONS})["hit_max_revisions"] is True
     assert revision_stats({"revision_count": 1})["hit_max_revisions"] is False
 
 

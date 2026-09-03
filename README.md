@@ -12,7 +12,7 @@ User Input
   -> RAG Retriever (remaps citations to a global numbering, embeds results into
        Chroma, retrieves the top-k chunks most relevant to the topic)
   -> Writer (drafts the report, keeping [n] citation markers + a References section)
-  -> Critic (scores the draft, loops back to Writer up to 3x if not approved;
+  -> Critic (scores the draft, loops back to Writer up to 5x if not approved;
        on approval, compresses citation numbers and finalizes the report)
   -> Final Report
 ```
@@ -63,8 +63,8 @@ research_system/
   to the same list instead of overwriting it.
 - **Writer-Critic revision loop with a hard stop.** The critic returns a
   structured (Pydantic) verdict; if not approved, `revision_count` increments and
-  control routes back to the writer. `revision_count >= 3` force-approves to
-  guarantee termination.
+  control routes back to the writer. `revision_count >= MAX_REVISIONS` (5)
+  force-approves to guarantee termination.
 - **Checkpointed runs.** The graph is compiled with `MemorySaver`, so each call to
   `DeepResearchSystem.research()` gets its own `thread_id` and is independently
   resumable/inspectable.
@@ -155,7 +155,7 @@ offline in `tests/test_eval_metrics.py`):**
   absolute score)
 - report length (chars + tokens, via `tiktoken`'s `cl100k_base` as a
   consistent length proxy, not an exact DeepSeek token count)
-- revision count — did the Writer-Critic loop hit its 3-revision hard stop
+- revision count — did the Writer-Critic loop hit its `MAX_REVISIONS` hard stop
 - wall-clock latency
 
 **LLM-as-judge (`eval/judge.py`, structured output, 1-5 per dimension):**

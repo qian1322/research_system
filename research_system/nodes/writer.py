@@ -1,4 +1,5 @@
 from research_system import config
+from research_system.nodes.critic import build_source_excerpt_map_from_numbered_sources
 from research_system.state import ResearchState
 
 
@@ -11,9 +12,23 @@ def writer_node(state: ResearchState) -> dict:
         print(f"[Writer] Revising (attempt {revision})...")
         task = f'Revise based on:\n{state.get("critique", "")}'
 
+    # Previously this was just "[n] url" -- the Writer could see a citation
+    # number existed but never the actual source text behind it, so it wrote
+    # specific claims from a blurry, multiply-summarized rag_context and
+    # attached whichever [n] felt contextually close. The eval harness's
+    # judge caught the result: faithfulness/citation_appropriateness scores
+    # never once reached 4/5 across 24 real eval runs (see README's
+    # Evaluation section) -- every run had claims invented or misattributed
+    # to a source that didn't say them. Giving the Writer the same per-
+    # citation excerpts the Critic already fact-checks against lets it
+    # ground claims while drafting instead of only being told after the fact.
     numbered_sources = state.get("numbered_sources", [])
-    sources_text = "\n".join(
-        f"[{i}] {s}" for i, s in enumerate(numbered_sources, 1) if s
+    excerpts = build_source_excerpt_map_from_numbered_sources(
+        numbered_sources, state.get("search_results", [])
+    )
+    sources_text = "\n\n".join(
+        f"[{i}] {url}\n{excerpts.get(i, '')}"
+        for i, url in enumerate(numbered_sources, 1) if url
     )
 
     prompt = (
@@ -32,16 +47,18 @@ def writer_node(state: ResearchState) -> dict:
         "Citation rule: keep every [n] marker from the context exactly as written "
         "in the body -- don't remove, renumber, or invent one. In '## References', "
         "list only the numbers actually cited in the body, formatted as '[n] url'.\n\n"
-        "Fact rule: do not invent specific numbers, percentages, statistics, company "
-        "names, or case studies that do not appear in the context above -- and do not "
-        "round or blend real numbers from the context into a new one that doesn't "
-        "actually appear there either (e.g. don't turn a source's 79% into 85%). If "
-        "the context doesn't contain a concrete figure or example for a point you "
-        "want to make, use honest hedged phrasing instead, such as '数据显示...呈上升"
-        "趋势' or '部分来源提及...' -- an accurate hedge beats a precise fabrication. "
-        "This applies to '## Case Analysis' too: only analyze cases that are actually "
-        "present in the context; if none are present, discuss patterns or trends from "
-        "the context instead of inventing a fictional case."
+        "Fact rule: every specific number, percentage, statistic, company name, or "
+        "case study you attach to a [n] must actually appear in THAT number's excerpt "
+        "above, not just somewhere in the general rag_context impression -- check the "
+        "excerpt for the exact [n] you're about to cite before writing the claim. Do "
+        "not invent facts, and do not round or blend a real number from an excerpt "
+        "into a new one that doesn't actually appear there either (e.g. don't turn a "
+        "source's 79% into 85%). If no excerpt supports a concrete figure or example "
+        "for a point you want to make, use honest hedged phrasing instead, such as "
+        "'数据显示...呈上升趋势' or '部分来源提及...' -- an accurate hedge beats a "
+        "precise fabrication. This applies to '## Case Analysis' too: only analyze "
+        "cases that actually appear in an excerpt; if none are present, discuss "
+        "patterns or trends from the context instead of inventing a fictional case."
     )
     writer_llm = config.get_llm(temperature=0.7)
     response = writer_llm.invoke([("user", prompt)])

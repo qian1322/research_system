@@ -86,22 +86,47 @@ def _extract_reference_urls(report: str) -> dict:
 
 
 # The raw source text lives in search_results[*]["sources"][*]["content"];
-# numbered_sources only ever had bare URLs. Rebuild citation number -> source
-# excerpt so a QualityVerdict caller can check a specific claim against the
-# actual text a citation points to, instead of a single blended summary blob.
-def build_source_excerpt_map(
-    report: str, search_results: List[dict], max_chars_per_source: int = 400
-) -> dict:
+# numbered_sources only ever had bare URLs. Build url -> content once, shared
+# by both excerpt-map builders below.
+def _url_to_content(search_results: List[dict]) -> dict:
     url_to_content: dict = {}
     for r in search_results:
         for s in r.get("sources", []):
             url = s.get("url")
             if url and url not in url_to_content:
                 url_to_content[url] = s.get("content", "")
+    return url_to_content
 
+
+# Rebuild citation number -> source excerpt so a QualityVerdict caller can
+# check a specific claim against the actual text a citation points to,
+# instead of a single blended summary blob. Ground truth for what [n] means
+# is the report's own References section (see _extract_reference_urls) --
+# correct whether or not renumber_citations() has run yet.
+def build_source_excerpt_map(
+    report: str, search_results: List[dict], max_chars_per_source: int = 400
+) -> dict:
+    url_to_content = _url_to_content(search_results)
     return {
         n: url_to_content.get(url, "")[:max_chars_per_source]
         for n, url in _extract_reference_urls(report).items()
+    }
+
+
+# Same idea, but for the Writer -- there's no report yet to parse a
+# References section out of, only the flattened numbered_sources list
+# (index i, 0-based) <-> citation [i+1], which is the correct correspondence
+# up until renumber_citations() compresses it later. Lets the Writer ground
+# claims in real source text while drafting, instead of only being told
+# after the fact (by the Critic) which claims didn't check out.
+def build_source_excerpt_map_from_numbered_sources(
+    numbered_sources: List[str], search_results: List[dict], max_chars_per_source: int = 400
+) -> dict:
+    url_to_content = _url_to_content(search_results)
+    return {
+        i: url_to_content.get(url, "")[:max_chars_per_source]
+        for i, url in enumerate(numbered_sources, start=1)
+        if url
     }
 
 

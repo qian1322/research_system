@@ -65,13 +65,32 @@ def renumber_citations(report: str, numbered_sources: List[str]) -> str:
     return f"{new_body}\n\n{REFERENCES_MARKER}\n{refs}\n"
 
 
-# numbered_sources only retains bare URLs (see rag._renumber_to_global); the raw
-# source text lives in search_results[*]["sources"][*]["content"]. Rebuild
-# citation number -> source excerpt so a QualityVerdict caller can check a
-# specific claim against the actual text a citation points to, instead of a
-# single blended summary blob.
+# report's own "## References" section is the ground truth for what [n]
+# currently means IN THIS REPORT -- assuming report [n] == numbered_sources[n-1]
+# (indexing into the pipeline's original, uncompressed source list) breaks the
+# moment renumber_citations() compresses/reorders citation numbers, which
+# happens whenever the report doesn't cite every retrieved source (i.e. almost
+# always -- citation_coverage has never hit 100% in eval/results/). Parsing the
+# report's own References section instead is correct whether or not
+# renumbering has happened yet.
+def _extract_reference_urls(report: str) -> dict:
+    idx = report.find(REFERENCES_MARKER)
+    if idx == -1:
+        return {}
+    refs = {}
+    for line in report[idx + len(REFERENCES_MARKER):].splitlines():
+        m = re.match(r"^\[(\d+)\]\s*(\S+)", line.strip())
+        if m:
+            refs[int(m.group(1))] = m.group(2)
+    return refs
+
+
+# The raw source text lives in search_results[*]["sources"][*]["content"];
+# numbered_sources only ever had bare URLs. Rebuild citation number -> source
+# excerpt so a QualityVerdict caller can check a specific claim against the
+# actual text a citation points to, instead of a single blended summary blob.
 def build_source_excerpt_map(
-    search_results: List[dict], numbered_sources: List[str], max_chars_per_source: int = 400
+    report: str, search_results: List[dict], max_chars_per_source: int = 400
 ) -> dict:
     url_to_content: dict = {}
     for r in search_results:
@@ -81,8 +100,8 @@ def build_source_excerpt_map(
                 url_to_content[url] = s.get("content", "")
 
     return {
-        i: url_to_content.get(url, "")[:max_chars_per_source]
-        for i, url in enumerate(numbered_sources, start=1)
+        n: url_to_content.get(url, "")[:max_chars_per_source]
+        for n, url in _extract_reference_urls(report).items()
     }
 
 
@@ -96,11 +115,11 @@ def build_quality_prompt(
     topic: str,
     research_plan: List[str],
     report: str,
-    numbered_sources: List[str],
     search_results: List[dict],
 ) -> str:
-    excerpts = build_source_excerpt_map(search_results, numbered_sources)
-    sources_block = "\n".join(f"[{n}] {numbered_sources[n - 1]}\n{text}" for n, text in excerpts.items())
+    ref_urls = _extract_reference_urls(report)
+    excerpts = build_source_excerpt_map(report, search_results)
+    sources_block = "\n".join(f"[{n}] {ref_urls[n]}\n{text}" for n, text in excerpts.items())
     plan_block = "\n".join(f"- {q}" for q in research_plan) if research_plan else "(not available)"
 
     return (
@@ -157,7 +176,6 @@ def critic_node(state: ResearchState) -> dict:
         topic=state["topic"],
         research_plan=state.get("research_plan", []),
         report=state["draft_report"],
-        numbered_sources=numbered_sources,
         search_results=state.get("search_results", []),
     )
     # method="function_calling": ChatOpenAI defaults to method="json_schema", whose

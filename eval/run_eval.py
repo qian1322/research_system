@@ -46,7 +46,6 @@ def run_case(case: EvalCase, run_judge: bool = True) -> dict:
             topic=case.topic,
             research_plan=result.get("research_plan", []),
             report=result.get("final_report", ""),
-            numbered_sources=result.get("numbered_sources", []),
             search_results=result.get("search_results", []),
         )
 

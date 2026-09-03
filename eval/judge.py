@@ -35,11 +35,10 @@ def judge_report(
     topic: str,
     research_plan: list[str],
     report: str,
-    numbered_sources: list[str],
     search_results: list[dict],
     pass_threshold: int = PASS_THRESHOLD,
 ) -> dict:
-    prompt = build_quality_prompt(topic, research_plan, report, numbered_sources, search_results)
+    prompt = build_quality_prompt(topic, research_plan, report, search_results)
     judge_llm = get_judge_llm().with_structured_output(QualityVerdict, method="function_calling")
     verdict: QualityVerdict = judge_llm.invoke([("user", prompt)])
 

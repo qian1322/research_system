@@ -12,7 +12,7 @@ User Input
   -> RAG Retriever (remaps citations to a global numbering, embeds results into
        Chroma, retrieves the top-k chunks most relevant to the topic)
   -> Writer (drafts the report, keeping [n] citation markers + a References section)
-  -> Critic (scores the draft, loops back to Writer up to 5x if not approved;
+  -> Critic (scores the draft, loops back to Writer up to 3x if not approved;
        on approval, compresses citation numbers and finalizes the report)
   -> Final Report
 ```
@@ -63,7 +63,7 @@ research_system/
   to the same list instead of overwriting it.
 - **Writer-Critic revision loop with a hard stop.** The critic returns a
   structured (Pydantic) verdict; if not approved, `revision_count` increments and
-  control routes back to the writer. `revision_count >= MAX_REVISIONS` (5)
+  control routes back to the writer. `revision_count >= MAX_REVISIONS` (3)
   force-approves to guarantee termination.
 - **Checkpointed runs.** The graph is compiled with `MemorySaver`, so each call to
   `DeepResearchSystem.research()` gets its own `thread_id` and is independently

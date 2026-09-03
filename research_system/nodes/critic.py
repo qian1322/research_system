@@ -7,7 +7,7 @@ from research_system import config
 from research_system.state import ResearchState
 
 REFERENCES_MARKER = "## References"
-MAX_REVISIONS = 5  # hard stop for the Writer-Critic loop
+MAX_REVISIONS = 3  # hard stop for the Writer-Critic loop
 
 
 class CriticOutput(BaseModel):

@@ -173,6 +173,24 @@ def render_markdown(report: dict) -> str:
             f"{rm['citation_coverage']['coverage_ratio']:.0%} | "
             f"{judge_avg_cell} | {judge_pass_cell} |"
         )
+
+    # 指标表只看得出"好不好",看不出"写了什么"——把每个 case 的完整
+    # 报告正文（连同裁判的 reasoning）附在后面，这样一份 .md 文件就能同时
+    # 兼顾数据和可读的原文，不用再去 JSON 里翻转义字符串。
+    lines += ["", "## Reports", ""]
+    for c in report["cases"]:
+        lines.append(f"### {c['case_id']}")
+        lines.append("")
+        if c.get("error"):
+            lines.append(f"ERROR: {c['error']}")
+            lines.append("")
+            continue
+        jm = c.get("judge_metrics")
+        if jm:
+            lines.append(f"**Judge reasoning:** {jm['reasoning']}")
+            lines.append("")
+        lines.append(c.get("final_report", "(empty)"))
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 

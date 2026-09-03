@@ -33,13 +33,15 @@ def writer_node(state: ResearchState) -> dict:
         "in the body -- don't remove, renumber, or invent one. In '## References', "
         "list only the numbers actually cited in the body, formatted as '[n] url'.\n\n"
         "Fact rule: do not invent specific numbers, percentages, statistics, company "
-        "names, or case studies that do not appear in the context above. If the "
-        "context doesn't contain a concrete figure or example for a point you want "
-        "to make, describe it qualitatively instead of making up a number or a case "
-        "-- an accurate but vague statement is better than a precise but fabricated "
-        "one. This applies to '## Case Analysis' too: only analyze cases that are "
-        "actually present in the context; if none are present, discuss patterns or "
-        "trends from the context instead of inventing a fictional case."
+        "names, or case studies that do not appear in the context above -- and do not "
+        "round or blend real numbers from the context into a new one that doesn't "
+        "actually appear there either (e.g. don't turn a source's 79% into 85%). If "
+        "the context doesn't contain a concrete figure or example for a point you "
+        "want to make, use honest hedged phrasing instead, such as '数据显示...呈上升"
+        "趋势' or '部分来源提及...' -- an accurate hedge beats a precise fabrication. "
+        "This applies to '## Case Analysis' too: only analyze cases that are actually "
+        "present in the context; if none are present, discuss patterns or trends from "
+        "the context instead of inventing a fictional case."
     )
     writer_llm = config.get_llm(temperature=0.7)
     response = writer_llm.invoke([("user", prompt)])

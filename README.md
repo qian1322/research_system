@@ -1,5 +1,7 @@
 # Multi-Agent Deep Research System
 
+**English** | [中文](README.zh-CN.md)
+
 A LangGraph-based multi-agent pipeline that takes a research topic, plans it into
 sub-questions, researches them in parallel, synthesizes the findings, and writes
 a report through an automated Writer-Critic revision loop.

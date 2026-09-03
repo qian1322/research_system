@@ -190,25 +190,64 @@ above temperature 0 (writer=0.7, search=0.3, rag=0.3), so a single
 before/after pair reflects the change *plus* run-to-run noise — run each
 side twice if you need a confident before/after claim.
 
-### Sample output (real 2-case run, no code changes yet)
+### Iteration history: a real debugging trail, not a single number
 
-| Metric | Value |
-|---|---|
-| Citation valid rate | 100% |
-| Reference-list consistent rate | 100% |
-| Avg citation coverage | 46% |
-| Avg report length (tokens) | 4816 |
-| Avg latency (s) | 61.9 |
-| Max-revision hit rate | 0% |
-| Avg judge score (1-5) | 2.75 |
-| Judge pass rate | 0% |
+A single eval run's absolute score isn't that meaningful on its own (see the
+citation-coverage caveat above) — what matters is whether a specific,
+isolated change, validated against the same 2 cases, actually moved the
+needle. Here's the full trail, including a change that turned out to be a
+mistake:
 
-This run's `judge_metrics.reasoning` fields caught a real failure mode
-`pytest`'s fakes structurally can't reach: the Writer fabricating specific
-case studies and statistics not present in any retrieved source, which the
-pipeline's own Critic (checking structure/coherence, not fact-grounding)
-approved on the first draft both times (`revision_count: 0`). See a saved
-run's JSON for the itemized per-claim findings.
+| Run | Change | Avg judge score (1-5) | Judge pass rate | Max-revision hit rate | Avg latency (s) |
+|---|---|---|---|---|---|
+| `baseline` | — | 2.75 | 0% | 0% | 61.9 |
+| `critic-rag-fix` | Critic fact-checks against `rag_context` (previously had no retrieved material at all); RAG `k` 3→6, context cap 500→2000 chars | 3.13 | 0% | 0% | 79.5 |
+| `writer-factrule` | Writer told not to invent numbers/case studies, hedge instead | 3.50 | 50% | 0% | 52.7 |
+| `critic-per-citation` | Critic checks each `[n]` against its own source excerpt, not one blended summary blob | 3.63 | 0% | 50% | 197.8 |
+| `max-revisions-5` *(reverted)* | Revision cap 3→5, hoping more attempts would resolve disagreements | 3.50 | 0% | **100%** | **386.7** |
+| `graded-severity` | Critic separates hard fabrication from honest hedged language; cap back to 3 | 3.50 | 0% | 50% | 129.1 |
+
+What each row actually found:
+- **`critic-rag-fix`**: the Critic originally had *no* retrieved material to
+  check the draft against — it was rating structure and tone, not truth.
+  Giving it `rag_context`, plus widening the RAG budget so the Writer had
+  enough real material to draw from, nearly doubled citation coverage
+  (46%→94%) and lifted the judge score — but didn't fix fabrication on its own.
+- **`writer-factrule`**: telling the Writer directly not to invent specifics
+  — and to prefer honest, vague language over a fabricated precise one — was
+  the single highest-leverage change in the series (first case ever to pass;
+  biggest single-step jump in judge score).
+- **`critic-per-citation`**: the Writer's fabrication had shifted from
+  *inventing* numbers to *blending* real ones (citing 85% when a source said
+  79%) — too subtle for one compressed context blob to catch. Reconstructing
+  per-citation source excerpts (the shared implementation now lives in
+  `critic.py`; `eval/judge.py` imports it instead of duplicating it) caught
+  this, but its zero-tolerance rejection rule created a **deadlock**: Critic
+  scores oscillated 4-6/10 across every revision, never reaching the approval
+  bar, because report-writing style keeps pulling the Writer toward specifics
+  the fact-check kept rejecting.
+- **`max-revisions-5` — the failed attempt**: raising the revision cap to
+  give that deadlock more room to resolve seemed reasonable. It wasn't:
+  **both** cases hit the new cap and got force-approved anyway (which skips
+  fact-checking entirely), latency nearly doubled, and the judge score didn't
+  move. More attempts don't help when the approval bar itself is structurally
+  unsatisfiable — that was the actual bug. Reverted.
+- **`graded-severity`**: splitting fact-check violations into HARD (invented
+  facts, unsupported/blended numbers — still blocks approval) vs. SOFT
+  (honest hedged phrasing — noted, doesn't block) broke the deadlock: one
+  case was genuinely approved by the Critic for the first time, not
+  force-approved, and latency dropped 3x from the previous run. Notably, the
+  *independent* judge score for that same case didn't move at all (3.5 before
+  and after) — this fixed the Critic's internal consistency, not the report's
+  objective quality. The gap between "the pipeline's own Critic approves it"
+  and "an independent judge thinks it's good" is still open — which is
+  exactly why this harness exists as a check independent of the pipeline's
+  own judgment, rather than trusting the Critic's self-report.
+
+Full per-run JSON/MD (topics, drafts, and each judge's itemized `reasoning`)
+lives in `eval/results/`, which is gitignored — commit history and the
+commit message on each change above are the durable record of what was
+tried, in what order, and why (including the revert).
 
 ### Cost caveat
 
@@ -238,7 +277,10 @@ Multi-Agent Deep Research System — LangGraph, DeepSeek
 - Built an offline evaluation harness (deterministic citation/reference-integrity
   checks + a cross-provider LLM-as-judge on coverage/faithfulness/coherence) that
   runs the real pipeline end-to-end and supports before/after regression
-  comparison; it surfaced a real hallucination failure mode (fabricated case
-  studies/statistics) that the pipeline's own Critic and the fake-based unit
+  comparison; drove 6 validated iterations with it (one deliberately reverted
+  after data showed it made things worse), raising the average judge score
+  from 2.75 to 3.50 (out of 5) and getting the first case to pass, while
+  surfacing failure modes (fabricated case studies, blended statistics, a
+  Critic approval deadlock) the pipeline's own Critic and the fake-based unit
   tests both missed.
 ```

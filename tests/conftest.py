@@ -1,7 +1,7 @@
 import pytest
 
 from research_system import config
-from research_system.nodes.critic import CriticOutput
+from research_system.nodes.critic import QualityVerdict
 from research_system.nodes.planner import ResearchPlan
 
 
@@ -22,12 +22,13 @@ class FakeStructuredLLM:
                 thinking="fake plan",
                 sub_questions=["子问题一", "子问题二"],
             )
-        if self._schema is CriticOutput:
-            return CriticOutput(
-                score=9,
-                approved=True,
-                improvements=[],
-                critique_summary="looks good",
+        if self._schema is QualityVerdict:
+            return QualityVerdict(
+                coverage_score=5,
+                faithfulness_score=5,
+                coherence_score=5,
+                citation_appropriateness_score=5,
+                reasoning="looks good",
             )
         raise ValueError(f"No fake response configured for schema {self._schema!r}")
 

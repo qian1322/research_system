@@ -1,20 +1,32 @@
 import re
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from research_system import config
 from research_system.state import ResearchState
 
 REFERENCES_MARKER = "## References"
 MAX_REVISIONS = 3  # hard stop for the Writer-Critic loop
+PASS_THRESHOLD = 4  # out of 5, on the averaged 4-dimension score
 
 
-class CriticOutput(BaseModel):
-    score: int  # 1-10
-    approved: bool
-    improvements: List[str]
-    critique_summary: str
+# Same schema critic_node (real-time, DeepSeek) and eval/judge.py's judge_report
+# (offline, optionally a different provider) both score against -- previously
+# the pipeline's own Critic used a vague holistic 1-10 "approved(>=7)" score
+# while eval/judge.py used this explicit 4-dimension rubric, so a report the
+# Critic approved could still fail the independent judge on the very same
+# report (observed: Critic 7/10 approved, judge averaged 3.5/5, still below
+# PASS_THRESHOLD). Sharing the schema AND the prompt (build_quality_prompt
+# below) doesn't guarantee the two agree -- they can still be different model
+# calls with different temperature/model -- but it removes "they were
+# scoring different things, worded differently" as a source of the gap.
+class QualityVerdict(BaseModel):
+    coverage_score: int = Field(..., ge=1, le=5, description="Does the report address every planned sub-question?")
+    faithfulness_score: int = Field(..., ge=1, le=5, description="Is every specific claim traceable to its cited source excerpt?")
+    coherence_score: int = Field(..., ge=1, le=5, description="Is the report well-organized, readable, non-repetitive?")
+    citation_appropriateness_score: int = Field(..., ge=1, le=5, description="Are [n] citations placed on the claims they actually support?")
+    reasoning: str = Field(..., description="Short justification for the scores, itemized by dimension.")
 
 
 def renumber_citations(report: str, numbered_sources: List[str]) -> str:
@@ -54,10 +66,10 @@ def renumber_citations(report: str, numbered_sources: List[str]) -> str:
 
 
 # numbered_sources only retains bare URLs (see rag._renumber_to_global); the raw
-# source text lives in state["search_results"][*]["sources"][*]["content"]. Rebuild
-# citation number -> source excerpt so the Critic (and eval/judge.py, which imports
-# this) can check a specific claim against the actual text a citation points to,
-# instead of a single blended summary blob.
+# source text lives in search_results[*]["sources"][*]["content"]. Rebuild
+# citation number -> source excerpt so a QualityVerdict caller can check a
+# specific claim against the actual text a citation points to, instead of a
+# single blended summary blob.
 def build_source_excerpt_map(
     search_results: List[dict], numbered_sources: List[str], max_chars_per_source: int = 400
 ) -> dict:
@@ -74,12 +86,51 @@ def build_source_excerpt_map(
     }
 
 
+# Shared prompt builder -- the actual mechanism that keeps critic_node and
+# eval/judge.py's judge_report evaluating the same report the same way.
+# Faithfulness explicitly calls out fabricated vs. honestly-hedged numbers so
+# a report isn't punished for saying "约" / "数据显示..." instead of quoting a
+# figure the source doesn't have (see the writer-factrule / graded-severity
+# history in README.md's Evaluation section for why that distinction matters).
+def build_quality_prompt(
+    topic: str,
+    research_plan: List[str],
+    report: str,
+    numbered_sources: List[str],
+    search_results: List[dict],
+) -> str:
+    excerpts = build_source_excerpt_map(search_results, numbered_sources)
+    sources_block = "\n".join(f"[{n}] {numbered_sources[n - 1]}\n{text}" for n, text in excerpts.items())
+    plan_block = "\n".join(f"- {q}" for q in research_plan) if research_plan else "(not available)"
+
+    return (
+        f"Topic: {topic}\n\n"
+        f"Planned sub-questions:\n{plan_block}\n\n"
+        f"Source excerpts (numbered, matching [n] citations in the report below; the "
+        f"ONLY material this report is allowed to be grounded in):\n{sources_block}\n\n"
+        f"Report:\n{report}\n\n"
+        "Score the report on 4 dimensions, 1 (poor) to 5 (excellent):\n"
+        "- coverage_score: does it address every planned sub-question above?\n"
+        "- faithfulness_score: is every specific number, percentage, statistic, "
+        "company name, or case study in the report traceable to its cited excerpt? "
+        "Score low (1-2) for anything invented, contradicted, or a rounded/blended "
+        "version of a real number that doesn't actually appear in the excerpt (e.g. "
+        "citing 85% when the excerpt says 79%). Honest hedged language ('约', '数据"
+        "显示...呈上升趋势', '部分来源提及...') that doesn't claim false precision "
+        "should NOT be penalized.\n"
+        "- coherence_score: is it well-organized, readable, non-repetitive?\n"
+        "- citation_appropriateness_score: are [n] citations placed on the claims "
+        "they actually support, rather than missing or misattributed?\n"
+        "Give a short reasoning explaining the scores, itemized by dimension."
+    )
+
+
 # DeepSeek's tool_choice="any" isn't always honored -- the model sometimes
 # replies without calling the tool at all, in which case with_structured_output
 # returns None (documented langchain_core behavior, not an error) instead of a
-# CriticOutput. Retry a couple times before giving up, since this is usually
+# QualityVerdict. Retry a couple times before giving up, since this is usually
 # transient.
-def _invoke_critic_with_retry(critic_llm, prompt: str, max_retries: int = 2) -> CriticOutput | None:
+def _invoke_critic_with_retry(critic_llm, prompt: str, max_retries: int = 2) -> QualityVerdict | None:
     for attempt in range(max_retries + 1):
         result = critic_llm.invoke([("user", prompt)])
         if result is not None:
@@ -102,38 +153,18 @@ def critic_node(state: ResearchState) -> dict:
             "critique": "Max revisions reached.",
         }
 
-    excerpts = build_source_excerpt_map(state.get("search_results", []), numbered_sources)
-    sources_block = "\n".join(f"[{n}] {numbered_sources[n - 1]}\n{text}" for n, text in excerpts.items())
-
-    prompt = (
-        f'Topic: {state["topic"]}\n\n'
-        f'Source excerpts (numbered, matching [n] citations in the report below; the '
-        f'ONLY material this report is allowed to be grounded in):\n{sources_block}\n\n'
-        f'Report:\n{state["draft_report"]}\n\n'
-        "Rate the report: score(1-10), approved(>=7), improvements, critique_summary.\n"
-        "Fact-check requirement: for EACH [n] citation used in the report, check it "
-        "against source excerpt [n] above, and classify any problem into one of two "
-        "severities:\n"
-        "- HARD violations (these MUST block approval, approved=false, no matter how "
-        "well-organized the report reads): an entirely invented case study, company, "
-        "or example not present in any excerpt; a specific number/statistic that does "
-        "not appear in its cited excerpt at all, including a rounded or blended version "
-        "of a real number (e.g. citing 85% when the excerpt says 79%); a claim that "
-        "contradicts its cited excerpt.\n"
-        "- SOFT issues (do NOT block approval by themselves -- note them in "
-        "improvements as suggestions, nothing more): honest, hedged language "
-        "paraphrasing an excerpt without quoting an exact figure (e.g. '数据显示...呈"
-        "上升趋势', '部分来源提及...'); minor wording or structure nitpicks.\n"
-        "Approve (approved=true) if and only if there are zero HARD violations, "
-        "regardless of any SOFT issues present. List every HARD violation found in "
-        "improvements.\n"
-        "Respond in Chinese."
+    prompt = build_quality_prompt(
+        topic=state["topic"],
+        research_plan=state.get("research_plan", []),
+        report=state["draft_report"],
+        numbered_sources=numbered_sources,
+        search_results=state.get("search_results", []),
     )
     # method="function_calling": ChatOpenAI defaults to method="json_schema", whose
     # response_format DeepSeek's API rejects with a 400 (see planner_node for the
     # same workaround).
     critic_llm = config.get_llm(temperature=0.2).with_structured_output(
-        CriticOutput, method="function_calling"
+        QualityVerdict, method="function_calling"
     )
     result = _invoke_critic_with_retry(critic_llm, prompt)
 
@@ -145,20 +176,31 @@ def critic_node(state: ResearchState) -> dict:
             "revision_count": revision + 1,
         }
 
-    print(f"  -> Score: {result.score}/10 | Approved: {result.approved}")
+    scores = [
+        result.coverage_score,
+        result.faithfulness_score,
+        result.coherence_score,
+        result.citation_appropriateness_score,
+    ]
+    average_score = sum(scores) / len(scores)
+    approved = average_score >= PASS_THRESHOLD
+    print(
+        f"  -> coverage={result.coverage_score} faithfulness={result.faithfulness_score} "
+        f"coherence={result.coherence_score} citations={result.citation_appropriateness_score} "
+        f"avg={average_score:.2f} | Approved: {approved}"
+    )
 
-    if result.approved:
+    if approved:
         return {
             "quality_approved": True,
             "final_report": renumber_citations(state["draft_report"], numbered_sources),
-            "critique": result.critique_summary,
+            "critique": result.reasoning,
             "revision_count": revision,
         }
     else:
-        fixes = "\n".join(f"- {i}" for i in result.improvements)
         return {
             "quality_approved": False,
-            "critique": f"Please improve:\n{fixes}",
+            "critique": f"Please improve:\n{result.reasoning}",
             "revision_count": revision + 1,
         }
 

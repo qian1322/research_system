@@ -26,6 +26,7 @@ class DeepResearchSystem:
             "research_plan": [],
             "search_results": [],
             "numbered_sources": [],
+            "source_titles": [],
             "rag_context": "",
             "draft_report": "",
             "critique": "",

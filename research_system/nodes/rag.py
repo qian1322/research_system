@@ -8,14 +8,21 @@ from research_system.prompts import rag_synthesis_prompt
 from research_system.state import ResearchState
 
 
-def _renumber_to_global(search_results: list[dict]) -> tuple[list[dict], list[str]]:
+def _renumber_to_global(search_results: list[dict]) -> tuple[list[dict], list[str], list[str]]:
     """
     Each search_agent runs in parallel and cites sources with its own locally
     scoped [1][2][3]. Before merging, remap every result's citations onto one
     pipeline-wide numbering so [n] means the same source everywhere and lines
     up 1:1 with the flattened source list.
+
+    Titles are collected in lockstep with URLs (same order, same index) --
+    Tavily gives us a title per source, previously discarded here since
+    numbered_sources only ever needed the URL. Kept as a separate parallel
+    list (source_titles) rather than changing numbered_sources' shape, so
+    every existing consumer of that plain URL list stays untouched.
     """
     global_sources: list[str] = []
+    global_titles: list[str] = []
     renumbered = []
     for r in search_results:
         local_sources = r.get("sources", [])
@@ -30,8 +37,9 @@ def _renumber_to_global(search_results: list[dict]) -> tuple[list[dict], list[st
         new_content = re.sub(r"\[(\d+)\]", _remap, r["content"])
         renumbered.append({**r, "content": new_content})
         global_sources.extend(s["url"] for s in local_sources)
+        global_titles.extend(s.get("title", "") for s in local_sources)
 
-    return renumbered, global_sources
+    return renumbered, global_sources, global_titles
 
 
 def rag_retriever_node(state: ResearchState) -> dict:
@@ -45,7 +53,7 @@ def rag_retriever_node(state: ResearchState) -> dict:
     search_results = state["search_results"]
     print(f"[RAG] Embedding {len(search_results)} results into Chroma")
 
-    renumbered_results, global_sources = _renumber_to_global(search_results)
+    renumbered_results, global_sources, global_titles = _renumber_to_global(search_results)
 
     docs = [
         Document(page_content=r["content"], metadata={"question": r["question"]})
@@ -69,4 +77,4 @@ def rag_retriever_node(state: ResearchState) -> dict:
     rag_llm = config.get_llm(temperature=0.3)
     response = rag_llm.invoke([("user", prompt)])
     print(f"  -> Context: {len(response.content)} chars")
-    return {"rag_context": response.content, "numbered_sources": global_sources}
+    return {"rag_context": response.content, "numbered_sources": global_sources, "source_titles": global_titles}

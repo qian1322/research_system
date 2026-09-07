@@ -9,6 +9,7 @@ def _initial_state(topic="测试主题"):
         "research_plan": [],
         "search_results": [],
         "numbered_sources": [],
+        "source_titles": [],
         "rag_context": "",
         "draft_report": "",
         "critique": "",

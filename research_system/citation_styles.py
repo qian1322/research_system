@@ -25,6 +25,7 @@ from datetime import date
 from urllib.parse import urlparse
 
 CITATION_STYLES = ("gbt7714", "ieee", "chicago_notes")
+DEFAULT_CITATION_STYLE = "gbt7714"
 
 
 @dataclass(frozen=True)
@@ -69,8 +70,14 @@ FORMATTERS = {
 }
 
 
+# Runs at the very end of an already-expensive pipeline run (search + RAG +
+# Writer-Critic loop all already paid for) -- an unrecognized style here
+# (e.g. a classifier upstream returning something unexpected) shouldn't
+# crash and throw away that work. Fall back to the plainest supported style
+# instead of raising.
 def format_reference(style: str, index: int, source: CitedSource, access_date: date | None = None) -> str:
     formatter = FORMATTERS.get(style)
     if formatter is None:
-        raise ValueError(f"Unknown citation style: {style!r}. Expected one of {CITATION_STYLES}.")
+        print(f"  -> Unknown citation style {style!r}, falling back to {DEFAULT_CITATION_STYLE!r}")
+        formatter = FORMATTERS[DEFAULT_CITATION_STYLE]
     return formatter(index, source, access_date)

@@ -1,8 +1,6 @@
 import re
 from datetime import date
 
-import pytest
-
 from research_system.citation_styles import (
     CitedSource,
     format_reference,
@@ -71,9 +69,11 @@ FORMATTERS_FOR_TEST = {
 }
 
 
-def test_format_reference_rejects_unknown_style():
-    with pytest.raises(ValueError, match="Unknown citation style"):
-        format_reference("apa7", 1, SOURCE, FIXED_DATE)
+def test_format_reference_falls_back_to_default_on_unknown_style():
+    # Shouldn't crash a run that already paid for search + writing --
+    # degrade to the default style instead.
+    result = format_reference("apa7", 1, SOURCE, FIXED_DATE)
+    assert result == format_reference_gbt7714(1, SOURCE, FIXED_DATE)
 
 
 def test_defaults_to_todays_date_when_access_date_omitted():

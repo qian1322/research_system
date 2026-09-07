@@ -4,6 +4,7 @@ from langgraph.types import Send
 from pydantic import BaseModel
 
 from research_system import config
+from research_system.prompts import planner_prompt
 from research_system.state import ResearchState
 
 
@@ -14,12 +15,7 @@ class ResearchPlan(BaseModel):
 
 def planner_node(state: ResearchState) -> dict:
     print(f'[Planner] {state["topic"][:50]}')
-    prompt = (
-        "You are a research planning expert.\n"
-        f'Topic: {state["topic"]}\n'
-        "Break this into 3-5 specific, independently-answerable sub-questions.\n"
-        "Output thinking + sub_questions, written in the same language as the topic above."
-    )
+    prompt = planner_prompt(state["topic"])
     planner_llm = config.get_llm(temperature=0.3).with_structured_output(
         ResearchPlan, method="function_calling"
     )

@@ -4,6 +4,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from research_system import config
+from research_system.prompts import rag_synthesis_prompt
 from research_system.state import ResearchState
 
 
@@ -64,20 +65,7 @@ def rag_retriever_node(state: ResearchState) -> dict:
         f"[Chunk {i}]\n{doc.page_content}" for i, doc in enumerate(retrieved_docs, 1)
     )
 
-    prompt = (
-        f'Topic: {state["topic"]}\n\n'
-        f"Most relevant retrieved chunks below (the [n] markers inside them are "
-        f"citation numbers pointing to source URLs):\n{retrieved_text}\n\n"
-        "Synthesize the key findings, data, and examples most useful for writing "
-        "the report.\n"
-        "Citation rule: keep every [n] marker exactly as written -- don't remove, "
-        "renumber, or invent one. If a piece of information has no marker, don't add one.\n"
-        # Previously capped at 500 chars for a report covering 3-5 sub-questions --
-        # too little real material for the Writer to draw on, which pushed it
-        # toward fabricating specifics to fill the gaps (see README's Evaluation
-        # section for a real example this surfaced).
-        "Respond in the same language as the topic above, under 2000 characters."
-    )
+    prompt = rag_synthesis_prompt(topic=state["topic"], retrieved_text=retrieved_text)
     rag_llm = config.get_llm(temperature=0.3)
     response = rag_llm.invoke([("user", prompt)])
     print(f"  -> Context: {len(response.content)} chars")

@@ -1,4 +1,5 @@
 from research_system import config
+from research_system.prompts import search_agent_prompt
 from research_system.state import ResearchState
 
 
@@ -29,17 +30,8 @@ def search_agent(state: ResearchState) -> dict:
         for i, s in enumerate(sources, 1)
     )
 
-    prompt = (
-        f'Research topic: {state["topic"]}\n'
-        f"Sub-question: {sub_q}\n\n"
-        f"Web search results (numbered):\n{sources_block}\n\n"
-        "Using ONLY the search results above, extract the key findings, data, "
-        "and examples that answer the sub-question.\n"
-        "Citation rule: after each fact, cite the result it came from using its "
-        f"bracketed number, e.g. '...market size reached $X [2]'. Only use numbers "
-        f"1-{len(sources)} that appear above -- never invent one, and never write "
-        "out the URL itself. A sentence may cite multiple sources, e.g. [1][3].\n"
-        "Respond in the same language as the topic above, under 300 characters."
+    prompt = search_agent_prompt(
+        topic=state["topic"], sub_question=sub_q, sources_block=sources_block, n_sources=len(sources)
     )
     search_llm = config.get_llm(temperature=0.3)
     response = search_llm.invoke([("user", prompt)])

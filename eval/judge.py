@@ -2,18 +2,20 @@
 LLM-as-judge scoring for eval reports.
 
 Reuses research_system.nodes.critic's QualityVerdict schema and
-build_quality_prompt -- the same rubric the pipeline's own Critic scores
-against -- so a gap between "the pipeline approved it" and "the judge liked
-it" reflects an actual disagreement, not two different rubrics worded
-differently. What stays independent here is the model: when OPENAI_API_KEY
-is set, judging uses a DIFFERENT provider (gpt-4o-mini) than the one that
-generated and critiqued the report (DeepSeek), reducing same-model
-self-evaluation bias. Falls back to the same DeepSeek model the pipeline
-itself uses when no OpenAI key is present, so the harness still works with
-zero extra keys -- just with a weaker bias guarantee (noted in the README).
+research_system.prompts' build_quality_prompt -- the same rubric the
+pipeline's own Critic scores against -- so a gap between "the pipeline
+approved it" and "the judge liked it" reflects an actual disagreement, not
+two different rubrics worded differently. What stays independent here is the
+model: when OPENAI_API_KEY is set, judging uses a DIFFERENT provider
+(gpt-4o-mini) than the one that generated and critiqued the report
+(DeepSeek), reducing same-model self-evaluation bias. Falls back to the same
+DeepSeek model the pipeline itself uses when no OpenAI key is present, so
+the harness still works with zero extra keys -- just with a weaker bias
+guarantee (noted in the README).
 """
 from research_system import config as pipeline_config
-from research_system.nodes.critic import PASS_THRESHOLD, QualityVerdict, build_quality_prompt
+from research_system.nodes.critic import PASS_THRESHOLD, QualityVerdict
+from research_system.prompts import build_quality_prompt
 
 
 # 选裁判模型：有 OPENAI_API_KEY 就用 gpt-4o-mini（跨供应商打分，

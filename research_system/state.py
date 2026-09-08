@@ -5,6 +5,10 @@ from typing import Annotated, List, TypedDict
 class ResearchState(TypedDict):
     topic: str
     research_plan: List[str]
+    # one of citation_styles.CITATION_STYLES, set by nodes/citation_style.py
+    # right after planning; consumed by critic.py's renumber_citations when
+    # it builds the final References section.
+    citation_style: str
     # operator.add: parallel search agents append their result, never overwrite the list
     search_results: Annotated[List[dict], operator.add]
     # flattened, pipeline-wide source list; index i (0-based) <-> citation [i+1] in the text

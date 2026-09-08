@@ -7,6 +7,7 @@ def _initial_state(topic="测试主题"):
     return {
         "topic": topic,
         "research_plan": [],
+        "citation_style": "",
         "search_results": [],
         "numbered_sources": [],
         "source_titles": [],

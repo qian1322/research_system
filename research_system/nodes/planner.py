@@ -42,6 +42,11 @@ def dispatch_search(state: ResearchState):
                 "sub_question": q,
                 # Must initialize all fields for the sub-state
                 "research_plan": [],
+                # citation_style_node already ran before this fan-out (see
+                # graph.py), so the real value is already in state -- carry
+                # it forward instead of resetting it like the not-yet-computed
+                # fields below.
+                "citation_style": state["citation_style"],
                 "search_results": [],
                 "numbered_sources": [],
                 "source_titles": [],

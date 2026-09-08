@@ -24,6 +24,7 @@ class DeepResearchSystem:
         initial = {
             "topic": topic,
             "research_plan": [],
+            "citation_style": "",
             "search_results": [],
             "numbered_sources": [],
             "source_titles": [],

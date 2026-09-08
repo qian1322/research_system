@@ -1,6 +1,7 @@
 import pytest
 
 from research_system import config
+from research_system.nodes.citation_style import CitationStyleChoice
 from research_system.nodes.critic import QualityVerdict
 from research_system.nodes.planner import ResearchPlan
 
@@ -30,6 +31,8 @@ class FakeStructuredLLM:
                 citation_appropriateness_score=5,
                 reasoning="looks good",
             )
+        if self._schema is CitationStyleChoice:
+            return CitationStyleChoice(domain="cs_ee_english")
         raise ValueError(f"No fake response configured for schema {self._schema!r}")
 
 

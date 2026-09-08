@@ -40,6 +40,24 @@ def planner_prompt(topic: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# nodes/citation_style.py
+# ---------------------------------------------------------------------------
+def classify_citation_style_prompt(topic: str) -> str:
+    return (
+        f"Topic: {topic}\n\n"
+        "Classify this research topic into exactly one of the following five "
+        "academic domains, based on which one a paper on this topic would most "
+        "naturally be written/submitted for:\n"
+        "- cn_thesis: a domestic Chinese bachelor's/master's/PhD thesis, general topic\n"
+        "- cs_ee_english: a computer science / electrical engineering paper for English-language submission\n"
+        "- social_business_english: psychology, social science, or business, written in English\n"
+        "- literature_language: literature or language studies\n"
+        "- history: history\n"
+        "Pick the single best-fitting domain."
+    )
+
+
+# ---------------------------------------------------------------------------
 # search.py
 # ---------------------------------------------------------------------------
 def search_agent_prompt(topic: str, sub_question: str, sources_block: str, n_sources: int) -> str:

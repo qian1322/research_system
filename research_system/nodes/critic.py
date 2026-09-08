@@ -4,6 +4,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from research_system import config
+from research_system.citation_styles import CitedSource, format_reference
 from research_system.prompts import REFERENCES_MARKER, build_quality_prompt
 from research_system.state import ResearchState
 
@@ -29,12 +30,20 @@ class QualityVerdict(BaseModel):
     reasoning: str = Field(..., description="Short justification for the scores, itemized by dimension.")
 
 
-def renumber_citations(report: str, numbered_sources: List[str]) -> str:
+def renumber_citations(
+    report: str,
+    numbered_sources: List[str],
+    source_titles: List[str],
+    citation_style: str,
+) -> str:
     """
     Writer-Critic revisions can drop cited facts, leaving gaps in the [n]
     sequence (e.g. [1][2][5][6]). Compress the surviving numbers to a
     contiguous 1..k run, in order of first appearance, and rebuild the
-    References section to match -- listing only sources actually cited.
+    References section to match -- listing only sources actually cited,
+    formatted per citation_style (see citation_styles.py; an unrecognized
+    style there falls back to the plainest supported one rather than
+    crashing an already-expensive run).
     """
     idx = report.find(REFERENCES_MARKER)
     body = report[:idx] if idx != -1 else report
@@ -59,7 +68,11 @@ def renumber_citations(report: str, numbered_sources: List[str]) -> str:
         return new_body
 
     refs = "\n".join(
-        f"[{new}] {numbered_sources[old - 1]}"
+        format_reference(
+            citation_style,
+            new,
+            CitedSource(title=source_titles[old - 1], url=numbered_sources[old - 1]),
+        )
         for old, new in sorted(old_to_new.items(), key=lambda kv: kv[1])
     )
     return f"{new_body}\n\n{REFERENCES_MARKER}\n{refs}\n"
@@ -83,13 +96,17 @@ def critic_node(state: ResearchState) -> dict:
     revision = state.get("revision_count", 0)
     print(f"[Critic] Reviewing (revision_count={revision})")
     numbered_sources = state.get("numbered_sources", [])
+    source_titles = state.get("source_titles", [])
+    citation_style = state.get("citation_style", "")
 
     # Hard stop: prevent infinite loop
     if revision >= MAX_REVISIONS:
         print("  -> Max revisions. Force approving.")
         return {
             "quality_approved": True,
-            "final_report": renumber_citations(state["draft_report"], numbered_sources),
+            "final_report": renumber_citations(
+                state["draft_report"], numbered_sources, source_titles, citation_style
+            ),
             "critique": "Max revisions reached.",
         }
 
@@ -132,7 +149,9 @@ def critic_node(state: ResearchState) -> dict:
     if approved:
         return {
             "quality_approved": True,
-            "final_report": renumber_citations(state["draft_report"], numbered_sources),
+            "final_report": renumber_citations(
+                state["draft_report"], numbered_sources, source_titles, citation_style
+            ),
             "critique": result.reasoning,
             "revision_count": revision,
         }

@@ -1,4 +1,5 @@
 import re
+import uuid
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -60,7 +61,16 @@ def rag_retriever_node(state: ResearchState) -> dict:
         for r in renumbered_results
     ]
     # Fresh in-memory collection per research run -- no cross-run leakage.
-    vectorstore = Chroma.from_documents(documents=docs, embedding=config.get_embeddings())
+    # Requires an explicit unique collection_name: Chroma.from_documents()
+    # defaults to the fixed name "langchain", so without this, successive
+    # calls in the same long-lived process (e.g. the Streamlit app running
+    # several topics in one session) would share and accumulate into one
+    # collection instead of each getting an isolated index.
+    vectorstore = Chroma.from_documents(
+        documents=docs,
+        embedding=config.get_embeddings(),
+        collection_name=f"rag-{uuid.uuid4().hex}",
+    )
     # k=6 comfortably covers the planner's max of 5 sub-questions (one chunk per
     # sub-question, see docs above) -- previously k=3 silently dropped whichever
     # chunks scored lowest on topic similarity, starving the Writer of real

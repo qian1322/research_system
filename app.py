@@ -75,6 +75,7 @@ with st.sidebar:
         "  -> RAG Retriever (Chroma)\n"
         "  -> Writer\n"
         "  -> Critic loop (max 3)\n"
+        "  -> Edit Review (loop: revise / done)\n"
         "  -> Final Report",
         language="text",
     )
@@ -101,7 +102,7 @@ with col_input:
 if "rs_system" not in st.session_state:
     st.session_state.rs_system = DeepResearchSystem()
 if "hitl_phase" not in st.session_state:
-    st.session_state.hitl_phase = "idle"  # idle | review | done
+    st.session_state.hitl_phase = "idle"  # idle | review | editing | done
 
 with col_result:
     st.subheader("\U0001F4CA Research Report")
@@ -150,13 +151,53 @@ with col_result:
             result = state["result"]
             if DeepResearchSystem.is_interrupted(result):
                 payload = DeepResearchSystem.get_interrupt_payload(result)
-                st.session_state.hitl_plan = payload["research_plan"]
+                # Critic approval no longer goes straight to END -- it pauses
+                # at edit_review first, so this is the next interrupt to expect.
+                st.session_state.hitl_report = payload["final_report"]
+                st.session_state.hitl_phase = "editing"
             else:
                 st.session_state.hitl_result = result
                 st.session_state.hitl_phase = "done"
             st.rerun()
         if col_cancel.button("❌ 取消", use_container_width=True):
             st.session_state.hitl_phase = "idle"
+            st.rerun()
+
+    if st.session_state.hitl_phase == "editing":
+        st.success("✅ 报告已生成 / 已更新。可以继续提修改要求,或直接完成。")
+        st.markdown("---")
+        st.markdown(st.session_state.hitl_report)
+        st.markdown("---")
+        instruction = st.text_area(
+            "后续修改指令(留空则完成)",
+            placeholder="例如:在结论部分补充一句关于局限性的说明",
+            height=100,
+            key="edit_instruction_input",
+        )
+        edit_k = st.number_input(
+            "涉及几段?", min_value=1, max_value=5, value=2, key="edit_k_input"
+        )
+        col_edit, col_finish = st.columns(2)
+        if col_edit.button("✏️ 提交修改", type="primary", use_container_width=True):
+            with st.spinner("✏️ Writer 正在根据指令修改..."):
+                state = st.session_state.rs_system.resume_research(
+                    st.session_state.hitl_config,
+                    {"edit_instructions": instruction.strip(), "edit_k": int(edit_k)},
+                )
+            result = state["result"]
+            if DeepResearchSystem.is_interrupted(result):
+                payload = DeepResearchSystem.get_interrupt_payload(result)
+                st.session_state.hitl_report = payload["final_report"]
+            else:
+                st.session_state.hitl_result = result
+                st.session_state.hitl_phase = "done"
+            st.rerun()
+        if col_finish.button("✅ 完成", use_container_width=True):
+            state = st.session_state.rs_system.resume_research(
+                st.session_state.hitl_config, {"edit_instructions": None}
+            )
+            st.session_state.hitl_result = state["result"]
+            st.session_state.hitl_phase = "done"
             st.rerun()
 
     if st.session_state.hitl_phase == "done":

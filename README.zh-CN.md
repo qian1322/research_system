@@ -14,6 +14,9 @@
   -> Writer(撰写报告草稿,保留 [n] 引用标记 + 一份 References 参考文献列表)
   -> Critic(给草稿打分,如果不通过就打回 Writer 重写,最多 3 次;
        通过后压缩引用编号并生成最终报告)
+  -> Edit Review(暂停,等待用户提交可选的后续修改指令;每一轮先用关键词
+       匹配、匹配不到再用 RAG 检索定位到相关的段落,只改这几段,
+       再打回 Writer/Critic,直到用户提交空指令结束)
   -> 最终报告
 ```
 
@@ -33,12 +36,15 @@ research_system/
 │   ├── state.py                 # ResearchState(LangGraph 的 state schema)
 │   ├── graph.py                 # 构建并编译 StateGraph
 │   ├── system.py                # DeepResearchSystem:运行 + 打印/保存报告的便捷封装
+│   ├── report_sections.py       # 编辑循环用:把报告切段、RAG 检索出相关段落、
+│   │                             #   把 LLM 改完的内容拼回完整报告
 │   └── nodes/
 │       ├── planner.py           # planner_node、dispatch_search(Send API 并行分发)
 │       ├── search.py            # search_agent:Tavily 网页搜索 + LLM 提炼,标注 [n]
 │       ├── rag.py                # rag_retriever_node:引用重映射 + Chroma 向量检索
-│       ├── writer.py             # writer_node:撰写报告草稿,保留 [n] 引用
-│       └── critic.py             # critic_node、should_revise、renumber_citations
+│       ├── writer.py             # writer_node:撰写/修订报告,保留 [n] 引用
+│       ├── critic.py             # critic_node、should_revise、renumber_citations
+│       └── edit_review.py        # edit_review_node、should_continue_editing(编辑循环)
 ├── eval/                        # 可选的评测系统,跑真实流水线(见 ## 评测)
 │   ├── cases.py                  # 固定的评测 topic 集合
 │   ├── metrics.py                # 确定性、不调 API 的引用/长度指标
@@ -49,6 +55,9 @@ research_system/
     ├── conftest.py               # FakeLLM/FakeTavilySearch/FakeEmbeddings,测试不碰网络
     ├── test_critic.py            # 修订循环路由逻辑的单元测试
     ├── test_pipeline.py          # 用 fake 数据跑通整个图的端到端测试
+    ├── test_edit_review.py       # 编辑循环路由逻辑的单元测试
+    ├── test_report_sections.py   # 段落切分/检索/拼回的单元测试
+    ├── test_writer.py            # writer_node 段落级编辑路径的测试(用可控的假 LLM)
     └── test_eval_metrics.py      # eval/metrics.py 里纯函数的单元测试
 ```
 
@@ -61,6 +70,8 @@ research_system/
 - **真正的向量检索。** `rag_retriever_node` 把每条搜索结果嵌入(设了 `OPENAI_API_KEY` 就用 OpenAI 的 embedding,没设就用本地的 HuggingFace 模型)进这次研究专属的内存态 Chroma 索引,再只检索出跟主题最相关的 top-k 个 chunk——Writer 看不到全部原始结果,只看到被检索出来的那一部分。
 - **引用在整条流水线里保持一致。** 各个 search agent 并行运行,各自用局部编号 `[1][2][3]` 标注来源;RAG 这一步把所有结果重新映射到一套全流水线统一的编号(`numbered_sources`)上再做嵌入,这样下游任何地方的 `[n]` 指的都是同一个来源。Writer 保留这些标记,并加上一段 `## References`;一旦 Critic 批准(或者被修订上限强制批准),`renumber_citations` 会压缩编号里的空隙,重建 `## References`,只列出最终正文里真正被引用过的来源。
 - **可选的 LangSmith 调用链路追踪。** 设置 `LANGCHAIN_API_KEY` 就能给整条流水线打开完整追踪,不用改任何其他地方的代码——`config.py` 在 import 时就把相关环境变量配好了。
+- **报告通过后可以继续编辑,基于 checkpoint 状态而不是对话历史。** Critic 通过之后,图会在 `edit_review_node` 暂停(和 `human_review` 一样用 `interrupt()`/`Command(resume=...)`),等待一条可选的后续修改指令。每一轮都是从 `MemorySaver` 持久化的 state 里读当前的 `final_report`,不是靠累积一份对话记录;`edit_history` 也只保留最近 5 条原始指令,不会无限增长——这是刻意设计成"有界上下文",不是聊天日志。
+- **段落级检索编辑,不是每轮重发全文。** `report_sections.py` 把报告按 `## ` 标题切段,先用一张标题同义词表做关键词匹配(修了一个手动测试中发现的真实跨语言检索失误:中文指令里提到"结论部分",单靠向量相似度检索会选错段落),匹配不到再退回 Chroma 向量检索,只把匹配到的段落交给 Writer 修改。没被选中的段落完全不经过 LLM,原样拼回,不是靠"其余部分保持原样"这句 prompt 指令碰运气。如果报告切不出段落,或者 LLM 没按格式回,会退回全文编辑兜底。
 
 ## 环境搭建
 
@@ -93,6 +104,8 @@ system.save_report(result, "report.md")
 ```bash
 streamlit run app.py
 ```
+
+报告审核通过之后,CLI 和 Streamlit 界面都会提示输入一条可选的后续修改指令(以及这次编辑要涉及几段,默认 2),直接留空就结束编辑。每条指令都是基于当前报告应用修改,再交给 Critic 重新审核一遍,然后才会问下一条。
 
 ## 测试
 
@@ -221,4 +234,13 @@ Multi-Agent Deep Research System — LangGraph, DeepSeek
   情况后,把评测集从 2 个扩到 6 个 case;更大的样本量揭示出一个系统性的
   语言 bug(非中文 topic 也被强制用中文检索),修复后英文 topic 的引用
   覆盖率从 38.7% 提升到 70.7%,裁判分从 2.83 提升到 3.42。
+- 扩展流水线支持报告通过后的多轮人机协同编辑:复用 LangGraph 的
+  interrupt()/Command(resume=...) 模式,让用户可以对已审核通过的报告
+  提交后续修改指令,每一轮都基于 checkpoint 里的结构化状态、配合一个
+  有界的编辑历史窗口,而不是靠累积对话记录。
+- 为这套编辑功能设计了段落级 RAG 检索:把报告切成段落建 Chroma 索引,
+  只对指令相关的段落做修改,没被选中的段落原样拼回、不经过 LLM,
+  避免了依赖 LLM"自觉不动其他部分";手动测试中发现一次真实的跨语言
+  检索失误后加了关键词同义词预判环节,过程中还顺手修复了一个
+  Chroma 默认集合导致的跨调用状态污染 bug。
 ```

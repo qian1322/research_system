@@ -24,3 +24,15 @@ class ResearchState(TypedDict):
     revision_count: int  # hard stop for the Writer-Critic loop
     quality_approved: bool
     final_report: str
+    # current post-approval edit round's raw instruction; "" means no edit in
+    # progress. Set by nodes/edit_review.py, consumed by writer.py.
+    edit_instructions: str
+    # bounded (kept to the last few entries by edit_review_node itself) --
+    # deliberately NOT Annotated[..., operator.add]: a reducer always
+    # concatenates whatever a node returns, so capping length only works if
+    # the node's return value fully replaces this field instead.
+    edit_history: List[str]
+    # how many report sections a section-targeted edit round should retrieve
+    # and revise (see report_sections.py); user-configurable per round via
+    # edit_review_node, defaults to 2 if not provided.
+    edit_section_k: int

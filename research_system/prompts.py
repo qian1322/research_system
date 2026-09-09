@@ -199,6 +199,92 @@ def build_source_excerpt_map_from_numbered_sources(
     }
 
 
+# Same "[n] url\n{excerpt}" text block writer_node has always built inline
+# for its pre-report path; pulled out here so the new report-based variant
+# below (build_sources_text_from_report) doesn't duplicate the join logic a
+# third time.
+def build_sources_text_from_numbered_sources(
+    numbered_sources: List[str], search_results: List[dict], max_chars_per_source: int = 400
+) -> str:
+    excerpts = build_source_excerpt_map_from_numbered_sources(
+        numbered_sources, search_results, max_chars_per_source
+    )
+    return "\n\n".join(
+        f"[{i}] {url}\n{excerpts.get(i, '')}"
+        for i, url in enumerate(numbered_sources, start=1) if url
+    )
+
+
+# Same shape, but keyed off the report's OWN References section (via
+# build_source_excerpt_map) instead of the pipeline's original
+# numbered_sources list -- the correct source of truth once
+# renumber_citations() has compacted/reordered citation numbers, which is
+# the case for any report an edit round starts from.
+def build_sources_text_from_report(
+    report: str, search_results: List[dict], max_chars_per_source: int = 400
+) -> str:
+    ref_urls = _extract_reference_urls(report)
+    excerpts = build_source_excerpt_map(report, search_results, max_chars_per_source)
+    return "\n\n".join(
+        f"[{n}] {ref_urls[n]}\n{excerpts.get(n, '')}" for n in sorted(ref_urls)
+    )
+
+
+# Section-targeted variant of build_edit_task, for when report_sections.py's
+# retrieval has already narrowed the edit down to a handful of sections --
+# only those sections' text is sent, not the whole report. The strict
+# "output ONLY these headings, unchanged" instruction is what lets
+# nodes/writer.py parse the response back with report_sections.parse_section_edits()
+# and splice it into the untouched sections via reassemble_report(). If the
+# LLM doesn't follow it, parse_section_edits returns nothing and writer.py
+# falls back to build_edit_task (whole report) instead.
+def build_section_edit_task(target_sections, edit_instructions: str, edit_history: List[str] | None = None) -> str:
+    history_block = ""
+    prior = (edit_history or [])[:-1][-2:]
+    if prior:
+        history_block = "\n\nEarlier in this session you were also asked to:\n" + "\n".join(
+            f"- {h}" for h in prior
+        )
+
+    sections_block = "\n\n".join(f"{s.heading}\n{s.body}" for s in target_sections)
+
+    return (
+        "Revise ONLY the report section(s) below to satisfy this instruction, changing "
+        "only what the instruction requires -- keep every existing [n] citation number "
+        "exactly as-is; do not renumber, that happens separately.\n\n"
+        f"Instruction: {edit_instructions}"
+        f"{history_block}\n\n"
+        f"Section(s) to revise:\n{sections_block}\n\n"
+        "Output ONLY the revised section(s) above, nothing else -- no title, no other "
+        "sections, no References. Each section you output must start with its exact "
+        "original heading line unchanged (e.g. '## Key Findings')."
+    )
+
+
+# Builds the writer_prompt() "task" string for a post-approval edit round --
+# consumed the same way the initial-draft/revise task strings already are,
+# so writer_prompt itself needs no changes. Also serves as the whole-report
+# fallback for the section-targeted edit path above, when a report can't be
+# split into sections or the LLM didn't follow the section-only output format.
+def build_edit_task(final_report: str, edit_instructions: str, edit_history: List[str] | None = None) -> str:
+    history_block = ""
+    prior = (edit_history or [])[:-1][-2:]  # up to 2 entries, excluding the current instruction
+    if prior:
+        history_block = "\n\nEarlier in this session you were also asked to:\n" + "\n".join(
+            f"- {h}" for h in prior
+        )
+
+    return (
+        "Revise the report below to satisfy this instruction, changing only what the "
+        f"instruction requires -- keep every other section, sentence, and existing [n] "
+        "citation number exactly as-is. Do not renumber citations yourself; that happens "
+        "separately after your revision.\n\n"
+        f"Instruction: {edit_instructions}"
+        f"{history_block}\n\n"
+        f"Current report:\n{final_report}"
+    )
+
+
 # Shared prompt builder -- the actual mechanism that keeps critic_node and
 # eval/judge.py's judge_report evaluating the same report the same way.
 # Faithfulness explicitly calls out fabricated vs. honestly-hedged numbers so

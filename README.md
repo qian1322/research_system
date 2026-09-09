@@ -16,6 +16,10 @@ User Input
   -> Writer (drafts the report, keeping [n] citation markers + a References section)
   -> Critic (scores the draft, loops back to Writer up to 3x if not approved;
        on approval, compresses citation numbers and finalizes the report)
+  -> Edit Review (pauses for an optional follow-up edit instruction; each
+       round targets just the relevant report section(s) -- via a keyword
+       check, falling back to RAG retrieval over the report itself -- and
+       loops back to Writer/Critic until the user is done)
   -> Final Report
 ```
 
@@ -38,12 +42,15 @@ research_system/
 │   ├── state.py                 # ResearchState (LangGraph state schema)
 │   ├── graph.py                 # builds & compiles the StateGraph
 │   ├── system.py                # DeepResearchSystem: run + print/save convenience wrapper
+│   ├── report_sections.py       # post-approval edits: split report into sections, RAG-retrieve
+│   │                             #   the relevant one(s), reassemble the LLM's revision back in
 │   └── nodes/
 │       ├── planner.py           # planner_node, dispatch_search (Send API fan-out)
 │       ├── search.py            # search_agent: Tavily web search + LLM extraction, cites [n]
 │       ├── rag.py                # rag_retriever_node: citation remap + Chroma vector retrieval
-│       ├── writer.py             # writer_node: drafts report, preserves [n] citations
-│       └── critic.py             # critic_node, should_revise, renumber_citations
+│       ├── writer.py             # writer_node: drafts/revises report, preserves [n] citations
+│       ├── critic.py             # critic_node, should_revise, renumber_citations
+│       └── edit_review.py        # edit_review_node, should_continue_editing (post-approval loop)
 ├── eval/                        # opt-in evaluation harness, runs the REAL pipeline (see ## Evaluation)
 │   ├── cases.py                  # fixed set of eval topics
 │   ├── metrics.py                # deterministic, API-free citation/length metrics
@@ -54,6 +61,9 @@ research_system/
     ├── conftest.py               # FakeLLM/FakeTavilySearch/FakeEmbeddings so tests never hit the network
     ├── test_critic.py            # unit test for the revision-loop routing logic
     ├── test_pipeline.py          # end-to-end graph run with the fakes
+    ├── test_edit_review.py       # unit test for the edit-loop routing logic
+    ├── test_report_sections.py   # unit tests for section split/retrieve/reassemble
+    ├── test_writer.py            # writer_node's section-targeted edit path (scripted fake LLM)
     └── test_eval_metrics.py      # unit tests for eval/metrics.py's pure functions
 ```
 
@@ -91,6 +101,24 @@ research_system/
 - **Optional LangSmith tracing.** Setting `LANGCHAIN_API_KEY` turns on full
   pipeline tracing with zero code changes elsewhere — `config.py` wires the
   env vars once at import time.
+- **Post-approval editing, grounded in checkpointed state, not conversation
+  history.** After the Critic approves, the graph pauses at `edit_review_node`
+  (same `interrupt()`/`Command(resume=...)` pattern as `human_review`) for an
+  optional follow-up instruction. Each round reads the current `final_report`
+  from the `MemorySaver`-backed state rather than an accumulated transcript,
+  and `edit_history` is capped to the last 5 raw instructions instead of
+  growing unboundedly — a deliberately bounded-context design, not a chat log.
+- **Section-targeted edits, not whole-report resends.** `report_sections.py`
+  splits the report into `## `-headed sections, matches the instruction to
+  the relevant one(s) — first via a small heading-alias keyword check
+  (fixes a real cross-lingual miss found in manual testing: a Chinese
+  instruction naming "结论部分" was matched to the wrong section by
+  embedding similarity alone), falling back to Chroma similarity search over
+  the report's own sections otherwise — and has the Writer revise only those.
+  Untouched sections never pass through the LLM, so they're spliced back
+  byte-identical rather than relying on a "leave everything else alone"
+  prompt instruction. Falls back to a whole-report edit if the report can't
+  be split or the LLM doesn't follow the section-only output format.
 
 ## Setup
 
@@ -123,6 +151,11 @@ Or launch the Streamlit UI:
 ```bash
 streamlit run app.py
 ```
+
+Once a report is approved, both the CLI and the Streamlit UI prompt for an
+optional follow-up edit instruction (and how many sections it should target,
+default 2) — leave it blank to finish. Each instruction is applied against
+the current report and re-reviewed by the Critic before the next prompt.
 
 ## Testing
 
@@ -374,4 +407,16 @@ Multi-Agent Deep Research System — LangGraph, DeepSeek
   the larger sample surfaced a systemic language bug (non-Chinese topics
   were being searched in Chinese), fixing it raised English-topic citation
   coverage from 38.7% to 70.7% and judge score from 2.83 to 3.42.
+- Extended the pipeline with post-approval, multi-round human-in-the-loop
+  editing: reused LangGraph's interrupt()/Command(resume=...) pattern so a
+  user can submit follow-up edit instructions against an approved report,
+  grounding each round in checkpointed structured state with a bounded
+  edit-history window instead of an accumulated conversation transcript.
+- Designed a section-targeted RAG retrieval step for these edits — splitting
+  the report into its own sections, indexing them in Chroma, and revising
+  only the section(s) relevant to the instruction — so untouched sections
+  are spliced back byte-identical instead of relying on the LLM to leave
+  them alone; added a keyword-alias pre-check after manual testing surfaced
+  a real cross-lingual retrieval miss, and fixed a Chroma default-collection
+  bug (undocumented cross-call state leakage) found while testing it.
 ```

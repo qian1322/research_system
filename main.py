@@ -31,6 +31,16 @@ def review_plan_cli(sub_questions: list) -> list:
         return sub_questions
 
 
+def review_edit_cli(final_report: str) -> tuple[str, int] | None:
+    print("\n[Human Review] 报告已生成/已更新。")
+    instruction = input("输入后续修改指令(直接回车结束编辑): ").strip()
+    if not instruction:
+        return None
+    k_input = input("涉及几段?(直接回车默认 2): ").strip()
+    k = int(k_input) if k_input.isdigit() else 2
+    return instruction, k
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Multi-agent deep research system (LangGraph + DeepSeek)"
@@ -47,7 +57,7 @@ def main() -> None:
         sys.exit("DEEPSEEK_API_KEY is not set. Copy .env.example to .env and fill it in.")
 
     system = DeepResearchSystem()
-    result = system.research(args.topic, review_plan=review_plan_cli)
+    result = system.research(args.topic, review_plan=review_plan_cli, review_edit=review_edit_cli)
     system.print_report(result)
 
 

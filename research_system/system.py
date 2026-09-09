@@ -34,6 +34,9 @@ class DeepResearchSystem:
             "revision_count": 0,
             "quality_approved": False,
             "final_report": "",
+            "edit_instructions": "",
+            "edit_history": [],
+            "edit_section_k": 2,
         }
         print(f"\nSTART: {topic}\n" + "=" * 60)
         result = self.app.invoke(initial, config=config)
@@ -52,7 +55,13 @@ class DeepResearchSystem:
     def get_interrupt_payload(result: dict) -> dict:
         return result["__interrupt__"][0].value
 
-    def research(self, topic: str, review_plan=None, callbacks: list | None = None) -> dict:
+    def research(
+        self,
+        topic: str,
+        review_plan=None,
+        review_edit=None,
+        callbacks: list | None = None,
+    ) -> dict:
         """
         End-to-end run with an in-process human review loop.
 
@@ -60,6 +69,13 @@ class DeepResearchSystem:
             invoked with the Planner's proposed sub-questions; return the
             (possibly edited) list to approve. If omitted, the plan is
             approved as-is (no pause).
+        review_edit: optional callable(final_report: str) -> tuple[str, int] | None,
+            invoked each time an approved report is ready; return
+            (instruction, k) for the next follow-up edit -- k controls how
+            many report sections that round's retrieval targets (see
+            report_sections.py) -- or None to stop editing and finish. If
+            omitted, editing stops immediately (today's straight-to-END
+            behavior is preserved for callers that don't pass this).
         callbacks: see start_research.
         """
         state = self.start_research(topic, callbacks=callbacks)
@@ -67,9 +83,17 @@ class DeepResearchSystem:
 
         while self.is_interrupted(result):
             payload = self.get_interrupt_payload(result)
-            plan = payload["research_plan"]
-            approved_plan = review_plan(plan) if review_plan else plan
-            state = self.resume_research(state["config"], {"research_plan": approved_plan})
+            if payload["type"] == "plan_review":
+                plan = payload["research_plan"]
+                approved_plan = review_plan(plan) if review_plan else plan
+                resume_value = {"research_plan": approved_plan}
+            elif payload["type"] == "edit_review":
+                outcome = review_edit(payload["final_report"]) if review_edit else None
+                instruction, k = outcome if outcome else (None, 2)
+                resume_value = {"edit_instructions": instruction, "edit_k": k}
+            else:
+                raise ValueError(f"Unhandled interrupt type: {payload['type']!r}")
+            state = self.resume_research(state["config"], resume_value)
             result = state["result"]
 
         print(

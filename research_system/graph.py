@@ -3,6 +3,7 @@ from langgraph.graph import END, START, StateGraph
 
 from research_system.nodes.citation_style import citation_style_node
 from research_system.nodes.critic import critic_node, should_revise
+from research_system.nodes.edit_review import edit_review_node, should_continue_editing
 from research_system.nodes.human_review import human_review_node
 from research_system.nodes.planner import dispatch_search, planner_node
 from research_system.nodes.rag import rag_retriever_node
@@ -21,6 +22,7 @@ def build_graph():
     graph.add_node("rag_retriever", rag_retriever_node)
     graph.add_node("writer", writer_node)
     graph.add_node("critic", critic_node)
+    graph.add_node("edit_review", edit_review_node)
 
     graph.add_edge(START, "planner")
     graph.add_edge("planner", "citation_style")
@@ -38,7 +40,15 @@ def build_graph():
     graph.add_conditional_edges(
         "critic",
         should_revise,
-        {"approved": END, "revise": "writer"},
+        {"approved": "edit_review", "revise": "writer"},
+    )
+
+    # Post-approval edit loop: pause for an optional follow-up instruction,
+    # loop back through writer/critic if one is given, or finish.
+    graph.add_conditional_edges(
+        "edit_review",
+        should_continue_editing,
+        {"edit": "writer", "done": END},
     )
 
     memory = MemorySaver()

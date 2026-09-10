@@ -40,12 +40,27 @@ class DeepResearchSystem:
         }
         print(f"\nSTART: {topic}\n" + "=" * 60)
         result = self.app.invoke(initial, config=config)
+        self._cleanup_if_finished(config, result)
         return {"config": config, "result": result}
 
     def resume_research(self, config: dict, resume_value) -> dict:
         """Continue a run paused by start_research/resume_research with the human's decision."""
         result = self.app.invoke(Command(resume=resume_value), config=config)
+        self._cleanup_if_finished(config, result)
         return {"config": config, "result": result}
+
+    def _cleanup_if_finished(self, config: dict, result: dict) -> None:
+        """
+        self.app's MemorySaver checkpointer keeps every thread's full state
+        in memory for the process's lifetime, keyed by thread_id -- across
+        many runs on one long-lived DeepResearchSystem (e.g. app.py's one
+        instance per Streamlit session, via start_research's self._id-based
+        thread_id), that accumulates without bound. A thread that isn't
+        interrupted has nothing left to resume, so its checkpoint can be
+        dropped as soon as that run reaches a stopping point.
+        """
+        if not self.is_interrupted(result):
+            self.app.checkpointer.delete_thread(config["configurable"]["thread_id"])
 
     @staticmethod
     def is_interrupted(result: dict) -> bool:

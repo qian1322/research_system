@@ -65,7 +65,13 @@ research_system/
 
 - **用 Send API 做并行 fan-out。** `dispatch_search` 返回一个 `list[Send]`,每个子问题对应一个;LangGraph 会并发执行它们全部。`search_results` 用 `operator.add` 作为 reducer,让每个并行分支都是往同一个列表里追加,而不是互相覆盖。
 - **带硬停止的 Writer-Critic 修订循环。** Critic 返回一个结构化(Pydantic)的判定结果;如果不通过,`revision_count` 加一,控制流转回 Writer。`revision_count >= MAX_REVISIONS`(3)时强制批准,保证流程一定会终止。
-- **带检查点的运行。** 图是用 `MemorySaver` 编译的,所以每次调用 `DeepResearchSystem.research()` 都会拿到自己独立的 `thread_id`,可以独立地恢复/查看运行状态。
+- **带检查点的运行,结束后会自动清理。** 图是用 `MemorySaver` 编译的,所以每次调用
+  `DeepResearchSystem.research()` 都会拿到自己独立的 `thread_id`,可以独立地恢复/查看运行状态。
+  `MemorySaver` 不会自动过期任何数据,而一个 `DeepResearchSystem`(以及它的 checkpointer)
+  会存活一整个进程的生命周期——比如 `app.py` 里每个 Streamlit `session_state` 只建一个实例——
+  所以如果不管的话,每一轮运行的完整 state 会在整个会话期间一直堆在内存里。现在
+  `start_research`/`resume_research` 会在某个线程不再处于中断状态(也就是没有可恢复的内容)时
+  立刻删掉它的 checkpoint,已经跑完的运行不会再残留。
 - **有真实依据的搜索。** 每个并行的 `search_agent` 调用都会先针对自己的子问题做一次真实的 [Tavily](https://tavily.com/) 网页搜索,再让 LLM 只用这些搜索结果去提炼要点——LLM 不是凭自己的参数记忆在回答。每条事实都用带括号的数字(`[n]`)标注,指回它的来源。
 - **真正的向量检索。** `rag_retriever_node` 把每条搜索结果嵌入(设了 `OPENAI_API_KEY` 就用 OpenAI 的 embedding,没设就用本地的 HuggingFace 模型)进这次研究专属的内存态 Chroma 索引,再只检索出跟主题最相关的 top-k 个 chunk——Writer 看不到全部原始结果,只看到被检索出来的那一部分。
 - **引用在整条流水线里保持一致。** 各个 search agent 并行运行,各自用局部编号 `[1][2][3]` 标注来源;RAG 这一步把所有结果重新映射到一套全流水线统一的编号(`numbered_sources`)上再做嵌入,这样下游任何地方的 `[n]` 指的都是同一个来源。Writer 保留这些标记,并加上一段 `## References`;一旦 Critic 批准(或者被修订上限强制批准),`renumber_citations` 会压缩编号里的空隙,重建 `## References`,只列出最终正文里真正被引用过的来源。

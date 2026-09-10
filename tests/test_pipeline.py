@@ -1,6 +1,7 @@
 from langgraph.types import Command
 
 from research_system.graph import build_graph
+from research_system.system import DeepResearchSystem
 
 
 def _initial_state(topic="测试主题"):
@@ -109,3 +110,46 @@ def test_human_review_can_edit_plan(fake_llm):
 
     assert result["research_plan"] == edited_plan
     assert len(result["search_results"]) == 1
+
+
+def test_finished_run_drops_its_checkpoint(fake_llm):
+    """DeepResearchSystem reuses one graph (and its in-memory checkpointer)
+    across every run in the process -- e.g. app.py's one instance per
+    Streamlit session, via start_research's self._id-based thread_id. A
+    thread that finished (not interrupted) is never resumed again, so its
+    checkpoint should be dropped rather than left accumulating in memory for
+    the rest of the session."""
+    system = DeepResearchSystem()
+
+    state = system.start_research("测试主题")
+    thread_config = state["config"]
+
+    def _has_checkpoint():
+        return system.app.checkpointer.get_tuple(thread_config) is not None
+
+    # Still paused for plan review -- must stay resumable.
+    assert system.is_interrupted(state["result"])
+    assert _has_checkpoint()
+
+    payload = system.get_interrupt_payload(state["result"])
+    state = system.resume_research(thread_config, {"research_plan": payload["research_plan"]})
+    assert system.is_interrupted(state["result"])  # now paused at edit_review
+    assert _has_checkpoint()
+
+    state = system.resume_research(thread_config, {"edit_instructions": None})
+    assert not system.is_interrupted(state["result"])
+    assert not _has_checkpoint()
+
+
+def test_separate_runs_get_independent_thread_ids(fake_llm):
+    """Each start_research call on one long-lived DeepResearchSystem must get
+    its own thread_id, so cleaning up a finished run's checkpoint never
+    touches another run's still-in-progress state."""
+    system = DeepResearchSystem()
+
+    first = system.start_research("主题一")
+    second = system.start_research("主题二")
+
+    assert first["config"] != second["config"]
+    assert system.app.checkpointer.get_tuple(first["config"]) is not None
+    assert system.app.checkpointer.get_tuple(second["config"]) is not None

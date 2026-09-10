@@ -77,9 +77,15 @@ research_system/
   structured (Pydantic) verdict; if not approved, `revision_count` increments and
   control routes back to the writer. `revision_count >= MAX_REVISIONS` (3)
   force-approves to guarantee termination.
-- **Checkpointed runs.** The graph is compiled with `MemorySaver`, so each call to
-  `DeepResearchSystem.research()` gets its own `thread_id` and is independently
-  resumable/inspectable.
+- **Checkpointed runs, cleaned up when finished.** The graph is compiled with
+  `MemorySaver`, so each call to `DeepResearchSystem.research()` gets its own
+  `thread_id` and is independently resumable/inspectable. `MemorySaver` never
+  expires anything on its own, and one `DeepResearchSystem` (and its
+  checkpointer) lives for the whole process — e.g. one instance per Streamlit
+  `session_state` in `app.py` — so every run's full state would otherwise
+  accumulate in memory for the rest of the session. `start_research`/
+  `resume_research` now delete a thread's checkpoint as soon as it stops being
+  interrupted (i.e. nothing left to resume), so finished runs don't linger.
 - **Grounded search.** Each parallel `search_agent` call runs a real
   [Tavily](https://tavily.com/) web search for its sub-question first, then asks
   the LLM to extract findings using only those results — the LLM isn't answering
